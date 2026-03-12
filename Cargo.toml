@@ -1,0 +1,65 @@
+[package]
+name = "icanact-examples"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+icanact-core = { git = "ssh://git@github.com/moofone/actor-framework-core.git", rev = "7a83c5da5f0ae6044e88a9370bf8ee47ed8f19ec", features = ["async-actors", "remote", "lmdb-durability"] }
+
+[dev-dependencies]
+actix = "0.13.5"
+criterion = "0.5"
+kameo = "0.19.2"
+ractor = { version = "0.15.10", default-features = false, features = ["tokio_runtime", "output-port-v2"] }
+tokio = { version = "1.47", features = ["macros", "net", "rt", "rt-multi-thread", "signal", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+sonic-rs = "0.5.6"
+futures = "0.3"
+
+[[bench]]
+name = "local_tell"
+harness = false
+
+[[bench]]
+name = "actix_compare_criterion"
+harness = false
+
+[[bench]]
+name = "ask_local"
+harness = false
+
+[[bench]]
+name = "broadcast_local"
+harness = false
+
+[[bench]]
+name = "ephemeral_slacktor_poc"
+harness = false
+
+[[bench]]
+name = "latency_local"
+harness = false
+
+[[bench]]
+name = "local_tell_criterion"
+harness = false
+
+[[bench]]
+name = "pubsub_local"
+harness = false
+
+[[bench]]
+name = "routing_graph_sim"
+harness = false
+
+[[bench]]
+name = "spawn_pool"
+harness = false
+
+[[bench]]
+name = "ws_bridge"
+harness = false
