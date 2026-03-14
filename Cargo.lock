@@ -961,6 +961,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 [[package]]
 name = "icanact-core"
 version = "0.1.0"
+source = "git+ssh://git@github.com/moofone/actor-framework-core.git?branch=main#2a02f139026a24a76610aa851d80bd3f580d74e2"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -976,6 +977,7 @@ dependencies = [
 [[package]]
 name = "icanact-core-derive"
 version = "0.1.0"
+source = "git+ssh://git@github.com/moofone/actor-framework-core.git?branch=main#2a02f139026a24a76610aa851d80bd3f580d74e2"
 dependencies = [
  "proc-macro2",
  "quote",
