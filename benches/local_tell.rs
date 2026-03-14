@@ -1,7 +1,7 @@
 mod _bench_util;
 
 use _bench_util::{alloc_reset, alloc_snapshot, print_alloc_stats_row};
-use icanact_core::{Actor, local_sync as sync};
+use icanact_core::local_sync as sync;
 use std::{
     env,
     sync::{
@@ -163,27 +163,10 @@ fn main() {
     sync::counters_reset();
 
     let processed = Arc::new(AtomicU64::new(0));
-
-    struct BenchActor {
-        processed: Arc<AtomicU64>,
-    }
-
-impl Actor for BenchActor {
-    type Msg = u64;
-
-    #[inline(always)]
-    fn handle_tell(&mut self, _msg: Self::Msg) {
-        self.processed.fetch_add(1, Ordering::Relaxed);
-    }
-}
-
-    let (addr, handle) = sync::spawn_actor(
-        cfg.cap,
-        BenchActor {
-            processed: Arc::clone(&processed),
-        },
-    );
-    handle.wait_for_startup();
+    let processed_for_actor = Arc::clone(&processed);
+    let (addr, handle) = sync::mpsc::spawn(cfg.cap, move |_msg: u64| {
+        processed_for_actor.fetch_add(1, Ordering::Relaxed);
+    });
 
     // Warmup.
     run_producers(&addr, cfg.warmup, cfg.producers);

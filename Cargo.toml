@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-icanact-core = { git = "ssh://git@github.com/moofone/actor-framework-core.git", rev = "7a83c5da5f0ae6044e88a9370bf8ee47ed8f19ec", features = ["async-actors", "remote", "lmdb-durability"] }
+icanact-core = { git = "ssh://git@github.com/moofone/actor-framework-core.git", branch = "main", features = ["async-actors", "remote", "lmdb-durability"] }
 
 [dev-dependencies]
 actix = "0.13.5"
@@ -53,6 +53,10 @@ name = "pubsub_local"
 harness = false
 
 [[bench]]
+name = "pubsub_local_actix"
+harness = false
+
+[[bench]]
 name = "routing_graph_sim"
 harness = false
 
@@ -62,4 +66,12 @@ harness = false
 
 [[bench]]
 name = "ws_bridge"
+harness = false
+
+[[bench]]
+name = "kameo_compare_criterion"
+harness = false
+
+[[bench]]
+name = "ask_af_native"
 harness = false
