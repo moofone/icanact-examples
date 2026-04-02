@@ -11,7 +11,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-icanact-core = { git = "ssh://git@github.com/moofone/actor-framework-core.git", rev = "fc979c60bbc3768ac28f788c917ec30d00723259", default-features = false, features = ["async-actors", "lmdb-durability"] }
+icanact-core = { git = "ssh://git@github.com/moofone/actor-framework-core.git", branch = "main", default-features = false, features = ["async-actors", "lmdb-durability"] }
 
 [dev-dependencies]
 actix = "0.13.5"
