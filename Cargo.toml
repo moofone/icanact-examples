@@ -1,3 +1,9 @@
+[features]
+default = []
+remote = ["icanact-core/remote"]
+ws = ["icanact-core/ws"]
+lmdb-durability = ["icanact-core/lmdb-durability"]
+
 [package]
 name = "icanact-examples"
 version = "0.1.0"
@@ -5,10 +11,11 @@ edition = "2024"
 publish = false
 
 [dependencies]
-icanact-core = { git = "ssh://git@github.com/moofone/actor-framework-core.git", branch = "main", features = ["async-actors", "remote", "lmdb-durability"] }
+icanact-core = { git = "ssh://git@github.com/moofone/actor-framework-core.git", rev = "fc979c60bbc3768ac28f788c917ec30d00723259", default-features = false, features = ["async-actors", "lmdb-durability"] }
 
 [dev-dependencies]
 actix = "0.13.5"
+bytes = "1"
 criterion = "0.5"
 kameo = "0.19.2"
 ractor = { version = "0.15.10", default-features = false, features = ["tokio_runtime", "output-port-v2"] }
@@ -19,9 +26,22 @@ libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 sonic-rs = "0.5.6"
 futures = "0.3"
+rand = { version = "0.8", features = ["small_rng"] }
 
 [[bench]]
 name = "local_tell"
+harness = false
+
+[[bench]]
+name = "compare_sync_tell_current"
+harness = false
+
+[[bench]]
+name = "compare_async_tell_current"
+harness = false
+
+[[bench]]
+name = "compare_sync_async_ask_current"
 harness = false
 
 [[bench]]
@@ -69,9 +89,33 @@ name = "ws_bridge"
 harness = false
 
 [[bench]]
+name = "json_route_2sync"
+harness = false
+
+[[bench]]
+name = "json_same_thread_async"
+harness = false
+
+[[bench]]
 name = "kameo_compare_criterion"
 harness = false
 
 [[bench]]
 name = "ask_af_native"
+harness = false
+
+[[bench]]
+name = "sync_runtime_tell_v2_compare"
+harness = false
+
+[[bench]]
+name = "framework_tell_snapshot"
+harness = false
+
+[[bench]]
+name = "framework_actor_reality"
+harness = false
+
+[[bench]]
+name = "framework_actor_hotpath"
 harness = false
