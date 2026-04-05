@@ -130,7 +130,6 @@ fn parse_config() -> Result<Config, String> {
 fn merge_stats(dst: &mut PublishStats, src: PublishStats) {
     dst.attempted = dst.attempted.saturating_add(src.attempted);
     dst.delivered = dst.delivered.saturating_add(src.delivered);
-    dst.full = dst.full.saturating_add(src.full);
 }
 
 fn publish_n(
@@ -140,6 +139,10 @@ fn publish_n(
     start_seq: u64,
     n: u64,
 ) -> PublishStats {
+    let topic_handles = topics
+        .iter()
+        .map(|topic| pubsub.topic(topic))
+        .collect::<Vec<_>>();
     let mut stats = PublishStats::default();
     for i in 0..n {
         let idx = if hot_topic {
@@ -147,7 +150,7 @@ fn publish_n(
         } else {
             ((start_seq + i) as usize) % topics.len()
         };
-        let s = pubsub.publish(&topics[idx], 1);
+        let s = pubsub.publish_to(&topic_handles[idx], 1);
         merge_stats(&mut stats, s);
     }
     stats
@@ -265,12 +268,12 @@ fn main() {
     );
     println!("stripes: {}  threshold: {}", cfg.stripes, cfg.threshold);
     println!(
-        "warmup_stats: attempted={} delivered={} full={}",
-        warmup_stats.attempted, warmup_stats.delivered, warmup_stats.full
+        "warmup_stats: attempted={} delivered={}",
+        warmup_stats.attempted, warmup_stats.delivered
     );
     println!(
-        "stats: attempted={} delivered={} full={}",
-        stats.attempted, stats.delivered, stats.full
+        "stats: attempted={} delivered={}",
+        stats.attempted, stats.delivered
     );
     println!(
         "wall: {}  cpu: {}  cpu_util: {:.2}",
