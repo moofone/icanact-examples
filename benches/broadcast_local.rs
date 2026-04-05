@@ -11,13 +11,6 @@ use std::thread;
 use std::time::Instant;
 
 #[derive(Clone, Copy)]
-enum Mode {
-    Seq,
-    Concurrent,
-    Adaptive,
-}
-
-#[derive(Clone, Copy)]
 struct Config {
     subs: usize,
     msgs: u64,
@@ -26,7 +19,6 @@ struct Config {
     publishers: usize,
     stripes: usize,
     threshold: usize,
-    mode: Mode,
 }
 
 fn usage() -> &'static str {
@@ -39,8 +31,7 @@ fn usage() -> &'static str {
        --cap N          Subscriber mailbox capacity (default: 65_536)\n\
        --publishers N   Publisher threads (default: 1)\n\
        --stripes N      Fan-out worker stripes (default: available_parallelism)\n\
-       --threshold N    Adaptive concurrent threshold (default: 128)\n\
-       --mode MODE      seq|concurrent|adaptive (default: adaptive)\n"
+       --threshold N    Cached publisher refresh threshold (default: 128)\n"
 }
 
 fn parse_u64(s: &str) -> Result<u64, String> {
@@ -49,15 +40,6 @@ fn parse_u64(s: &str) -> Result<u64, String> {
 
 fn parse_usize(s: &str) -> Result<usize, String> {
     s.parse::<usize>().map_err(|e| e.to_string())
-}
-
-fn parse_mode(s: &str) -> Result<Mode, String> {
-    match s {
-        "seq" => Ok(Mode::Seq),
-        "concurrent" => Ok(Mode::Concurrent),
-        "adaptive" => Ok(Mode::Adaptive),
-        other => Err(format!("unknown mode: {other}")),
-    }
 }
 
 fn parse_config() -> Result<Config, String> {
@@ -71,7 +53,6 @@ fn parse_config() -> Result<Config, String> {
             .map(|n| n.get())
             .unwrap_or(1),
         threshold: 128,
-        mode: Mode::Adaptive,
     };
 
     let mut it = env::args().skip(1);
@@ -124,12 +105,6 @@ fn parse_config() -> Result<Config, String> {
                     .and_then(|s| parse_usize(&s))?
                     .max(1);
             }
-            "--mode" => {
-                cfg.mode = it
-                    .next()
-                    .ok_or_else(|| "missing value for --mode".to_string())
-                    .and_then(|s| parse_mode(&s))?;
-            }
             other => return Err(format!("unknown arg: {other}\n\n{}", usage())),
         }
     }
@@ -140,22 +115,14 @@ fn parse_config() -> Result<Config, String> {
 fn merge_stats(dst: &mut PublishStats, src: PublishStats) {
     dst.attempted = dst.attempted.saturating_add(src.attempted);
     dst.delivered = dst.delivered.saturating_add(src.delivered);
-    dst.full = dst.full.saturating_add(src.full);
-}
-
-fn publish_once(group: &BroadcastGroup<u64>, mode: Mode) -> PublishStats {
-    match mode {
-        Mode::Seq => group.publish_seq(1),
-        Mode::Concurrent => group.publish_concurrent(1),
-        Mode::Adaptive => group.publish(1),
-    }
 }
 
 fn run_publishers(group: Arc<BroadcastGroup<u64>>, cfg: Config, msgs: u64) -> PublishStats {
     if cfg.publishers <= 1 {
         let mut acc = PublishStats::default();
+        let mut publisher = group.publisher();
         for _ in 0..msgs {
-            merge_stats(&mut acc, publish_once(&group, cfg.mode));
+            merge_stats(&mut acc, publisher.publish(1));
         }
         return acc;
     }
@@ -167,15 +134,15 @@ fn run_publishers(group: Arc<BroadcastGroup<u64>>, cfg: Config, msgs: u64) -> Pu
 
     for i in 0..cfg.publishers {
         let g = Arc::clone(&group);
-        let mode = cfg.mode;
         let mut n = base;
         if (i as u64) < rem {
             n += 1;
         }
         joins.push(thread::spawn(move || {
             let mut acc = PublishStats::default();
+            let mut publisher = g.publisher();
             for _ in 0..n {
-                merge_stats(&mut acc, publish_once(&g, mode));
+                merge_stats(&mut acc, publisher.publish(1));
             }
             acc
         }));
@@ -191,14 +158,6 @@ fn run_publishers(group: Arc<BroadcastGroup<u64>>, cfg: Config, msgs: u64) -> Pu
 fn wait_deliveries(target: u64, delivered: &AtomicU64) {
     while delivered.load(Ordering::Acquire) < target {
         thread::yield_now();
-    }
-}
-
-fn mode_name(mode: Mode) -> &'static str {
-    match mode {
-        Mode::Seq => "seq",
-        Mode::Concurrent => "concurrent",
-        Mode::Adaptive => "adaptive",
     }
 }
 
@@ -247,22 +206,17 @@ fn main() {
     let cpu_s = cpu.as_secs_f64();
     println!("== icanact-core broadcast local ==");
     println!(
-        "mode: {}  subs: {}  msgs: {}  warmup: {}  publishers: {}  cap: {}",
-        mode_name(cfg.mode),
-        cfg.subs,
-        cfg.msgs,
-        cfg.warmup,
-        cfg.publishers,
-        cfg.cap
+        "mode: cached-publisher  subs: {}  msgs: {}  warmup: {}  publishers: {}  cap: {}",
+        cfg.subs, cfg.msgs, cfg.warmup, cfg.publishers, cfg.cap
     );
     println!("stripes: {}  threshold: {}", cfg.stripes, cfg.threshold);
     println!(
-        "warmup_stats: attempted={} delivered={} full={}",
-        warmup_stats.attempted, warmup_stats.delivered, warmup_stats.full
+        "warmup_stats: attempted={} delivered={}",
+        warmup_stats.attempted, warmup_stats.delivered
     );
     println!(
-        "stats: attempted={} delivered={} full={}",
-        stats.attempted, stats.delivered, stats.full
+        "stats: attempted={} delivered={}",
+        stats.attempted, stats.delivered
     );
     println!(
         "wall: {}  cpu: {}  cpu_util: {:.2}",

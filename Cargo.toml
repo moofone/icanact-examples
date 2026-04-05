@@ -11,14 +11,18 @@ edition = "2024"
 publish = false
 
 [dependencies]
-icanact-core = { git = "ssh://git@github.com/moofone/actor-framework-core.git", branch = "main", default-features = false, features = ["async-actors", "lmdb-durability"] }
+icanact-core = { path = "../../actor-framework-core", default-features = false, features = ["async-actors", "lmdb-durability"] }
 
 [dev-dependencies]
 actix = "0.13.5"
 bytes = "1"
 criterion = "0.5"
-kameo = "0.19.2"
-ractor = { version = "0.15.10", default-features = false, features = ["tokio_runtime", "output-port-v2"] }
+kameo = { version = "0.19.2", features = ["remote"] }
+icanact-remote = { git = "ssh://git@github.com/moofone/icanact-remote.git", branch = "main" }
+libp2p = { version = "0.56.0", features = ["cbor", "kad", "noise", "mdns", "quic", "request-response", "tcp", "tokio", "yamux"] }
+ractor = { version = "0.15.12", default-features = false, features = ["tokio_runtime", "output-port-v2", "cluster"] }
+ractor_cluster = "0.15.12"
+rustls = "0.23.37"
 tokio = { version = "1.47", features = ["macros", "net", "rt", "rt-multi-thread", "signal", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
@@ -27,6 +31,7 @@ serde = { version = "1", features = ["derive"] }
 sonic-rs = "0.5.6"
 futures = "0.3"
 rand = { version = "0.8", features = ["small_rng"] }
+rkyv = { version = "0.8", features = ["bytecheck"] }
 
 [[bench]]
 name = "local_tell"
@@ -119,3 +124,13 @@ harness = false
 [[bench]]
 name = "framework_actor_hotpath"
 harness = false
+
+[[bench]]
+name = "remote_framework_compare"
+harness = false
+
+[[bench]]
+name = "kameo_ractor_ask_compare"
+harness = false
+[patch."ssh://git@github.com/moofone/icanact-remote.git"]
+icanact-remote = { path = "/tmp/icanact-remote-work" }
