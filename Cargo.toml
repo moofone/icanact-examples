@@ -11,13 +11,13 @@ edition = "2024"
 publish = false
 
 [dependencies]
-icanact-core = { path = "../../actor-framework-core", default-features = false, features = ["async-actors", "lmdb-durability"] }
+icanact-core = { path = "../actor-framework-core", default-features = false, features = ["async-actors", "lmdb-durability"] }
 
 [dev-dependencies]
 actix = "0.13.5"
 bytes = "1"
 criterion = "0.5"
-kameo = { version = "0.19.2", features = ["remote"] }
+kameo = { version = "0.20.0", features = ["remote"] }
 icanact-remote = { git = "ssh://git@github.com/moofone/icanact-remote.git", branch = "main" }
 libp2p = { version = "0.56.0", features = ["cbor", "kad", "noise", "mdns", "quic", "request-response", "tcp", "tokio", "yamux"] }
 ractor = { version = "0.15.12", default-features = false, features = ["tokio_runtime", "output-port-v2", "cluster"] }
@@ -50,34 +50,6 @@ name = "compare_sync_async_ask_current"
 harness = false
 
 [[bench]]
-name = "actix_compare_criterion"
-harness = false
-
-[[bench]]
-name = "ask_local"
-harness = false
-
-[[bench]]
-name = "broadcast_local"
-harness = false
-
-[[bench]]
-name = "ephemeral_slacktor_poc"
-harness = false
-
-[[bench]]
-name = "latency_local"
-harness = false
-
-[[bench]]
-name = "local_tell_criterion"
-harness = false
-
-[[bench]]
-name = "pubsub_local"
-harness = false
-
-[[bench]]
 name = "pubsub_local_actix"
 harness = false
 
@@ -86,19 +58,7 @@ name = "routing_graph_sim"
 harness = false
 
 [[bench]]
-name = "spawn_pool"
-harness = false
-
-[[bench]]
-name = "ws_bridge"
-harness = false
-
-[[bench]]
 name = "json_route_2sync"
-harness = false
-
-[[bench]]
-name = "json_same_thread_async"
 harness = false
 
 [[bench]]
@@ -110,27 +70,28 @@ name = "ask_af_native"
 harness = false
 
 [[bench]]
-name = "sync_runtime_tell_v2_compare"
-harness = false
-
-[[bench]]
-name = "framework_tell_snapshot"
-harness = false
-
-[[bench]]
 name = "framework_actor_reality"
-harness = false
-
-[[bench]]
-name = "framework_actor_hotpath"
 harness = false
 
 [[bench]]
 name = "remote_framework_compare"
 harness = false
+required-features = ["remote"]
 
 [[bench]]
 name = "kameo_ractor_ask_compare"
 harness = false
-[patch."ssh://git@github.com/moofone/icanact-remote.git"]
-icanact-remote = { path = "/tmp/icanact-remote-work" }
+required-features = ["remote"]
+
+[[bench]]
+name = "spsc_sync_actor_pair"
+harness = false
+
+[[bench]]
+name = "spsc_async_to_sync_actor"
+harness = false
+
+[[bench]]
+name = "ws_bridge"
+harness = false
+required-features = ["ws"]

@@ -610,18 +610,18 @@ checksum = "2f421161cb492475f1661ddc9815a745a1c894592070661180fdec3d4872e9c3"
 
 [[package]]
 name = "const-str"
-version = "0.7.1"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0664d2867b4a32697dfe655557f5c3b187e9b605b38612a748e5ec99811d160"
+checksum = "18f12cc9948ed9604230cdddc7c86e270f9401ccbe3c2e98a4378c5e7632212f"
 dependencies = [
  "const-str-proc-macro",
 ]
 
 [[package]]
 name = "const-str-proc-macro"
-version = "0.7.1"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c25c2a02ba19f2d4fd9f54d5f239f97c867deb7397763a9771edab63c44a4fa"
+checksum = "1c7e7913ec01ed98b697e62f8d3fd63c86dc6cccaf983c7eebc64d0e563b0ad9"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1559,6 +1559,7 @@ dependencies = [
  "icanact-core-derive",
  "icanact-remote",
  "kanal",
+ "libc",
  "rkyv",
  "rustc-hash",
  "tokio",
@@ -1602,6 +1603,7 @@ dependencies = [
 [[package]]
 name = "icanact-remote"
 version = "0.1.0"
+source = "git+ssh://git@github.com/moofone/icanact-remote.git?branch=main#32ea7e8bfdbed00a1ec1f02dd7791eaa95e032eb"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -1885,12 +1887,12 @@ dependencies = [
 
 [[package]]
 name = "kameo"
-version = "0.19.2"
+version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c4af7638c67029fd6821d02813c3913c803784648725d4df4082c9b91d7cbb1"
+checksum = "b1dfd134d7a2c6ec05ee696dcbf3f7a034bdb97ecc623e981014652dcd124d77"
 dependencies = [
  "const-fnv1a-hash",
- "const-str 0.7.1",
+ "const-str 1.1.0",
  "downcast-rs",
  "dyn-clone",
  "either",
@@ -1907,9 +1909,9 @@ dependencies = [
 
 [[package]]
 name = "kameo_macros"
-version = "0.19.0"
+version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a13c324e2d8c8e126e63e66087448b4267e263e6cb8770c56d10a9d0d279d9e2"
+checksum = "16c9002c9ecd16e1636f566c0bf62db48e70d86ed0d0a91b398955e883217a23"
 dependencies = [
  "heck",
  "proc-macro2",

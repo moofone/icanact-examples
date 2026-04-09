@@ -2,19 +2,23 @@ use std::future::Future;
 use std::io::{BufRead, BufReader, Write};
 use std::net::SocketAddr;
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Once;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 
 use bytes::Bytes;
-use icanact_core::remote::{self as af_remote, NetworkRef, RemoteMailboxAddr, RemoteTransportHandle, try_tell_network};
+use icanact_core::remote::{
+    self as af_remote, NetworkRef, RemoteMailboxAddr, RemoteTransportHandle, try_tell_network,
+};
 use icanact_remote::registry::{ActorMessageHandlerSync, ActorResponse};
 use icanact_remote::{AlignedBytes, GossipConfig, GossipRegistryHandle, KeyPair, WireType};
-use kameo::actor::{ActorRef as KameoActorRef, RemoteActorRef as KameoRemoteActorRef, Spawn as KameoSpawn};
+use kameo::actor::{
+    ActorRef as KameoActorRef, RemoteActorRef as KameoRemoteActorRef, Spawn as KameoSpawn,
+};
 use kameo::message::{Context as KameoContext, Message as KameoMessage};
 use libp2p::swarm::{NetworkBehaviour, SwarmEvent};
 use libp2p::{Multiaddr, SwarmBuilder, mdns, noise, tcp, yamux};
@@ -35,7 +39,9 @@ impl Framework {
             "af" => Ok(Self::Af),
             "kameo" => Ok(Self::Kameo),
             "both" => Ok(Self::Both),
-            other => Err(format!("invalid --framework '{other}', expected af|kameo|both")),
+            other => Err(format!(
+                "invalid --framework '{other}', expected af|kameo|both"
+            )),
         }
     }
 }
@@ -53,7 +59,9 @@ impl Workflow {
             "tell" => Ok(Self::Tell),
             "tell-confirm" => Ok(Self::TellConfirm),
             "ask" => Ok(Self::Ask),
-            other => Err(format!("invalid --workflow '{other}', expected tell|tell-confirm|ask")),
+            other => Err(format!(
+                "invalid --workflow '{other}', expected tell|tell-confirm|ask"
+            )),
         }
     }
 }
@@ -118,33 +126,58 @@ fn parse_config() -> Result<Config, String> {
         match arg.as_str() {
             "--bench" => {}
             "--role" => {
-                cfg.role = match it.next().ok_or_else(|| "missing value for --role".to_string())?.as_str() {
+                cfg.role = match it
+                    .next()
+                    .ok_or_else(|| "missing value for --role".to_string())?
+                    .as_str()
+                {
                     "server-af" => Role::ServerAf,
                     "server-kameo" => Role::ServerKameo,
                     other => return Err(format!("invalid role: {other}")),
                 };
             }
             "--framework" => {
-                cfg.framework = Framework::parse(&it.next().ok_or_else(|| "missing value for --framework".to_string())?)?;
+                cfg.framework = Framework::parse(
+                    &it.next()
+                        .ok_or_else(|| "missing value for --framework".to_string())?,
+                )?;
             }
             "--workflow" => {
-                cfg.workflow = Workflow::parse(&it.next().ok_or_else(|| "missing value for --workflow".to_string())?)?;
+                cfg.workflow = Workflow::parse(
+                    &it.next()
+                        .ok_or_else(|| "missing value for --workflow".to_string())?,
+                )?;
             }
             "--ops" => {
-                cfg.ops = it.next().ok_or_else(|| "missing value for --ops".to_string())?
-                    .parse::<u64>().map_err(|_| "invalid integer for --ops".to_string())?.max(1);
+                cfg.ops = it
+                    .next()
+                    .ok_or_else(|| "missing value for --ops".to_string())?
+                    .parse::<u64>()
+                    .map_err(|_| "invalid integer for --ops".to_string())?
+                    .max(1);
             }
             "--warmup" => {
-                cfg.warmup = it.next().ok_or_else(|| "missing value for --warmup".to_string())?
-                    .parse::<u64>().map_err(|_| "invalid integer for --warmup".to_string())?;
+                cfg.warmup = it
+                    .next()
+                    .ok_or_else(|| "missing value for --warmup".to_string())?
+                    .parse::<u64>()
+                    .map_err(|_| "invalid integer for --warmup".to_string())?;
             }
             "--threads" => {
-                cfg.threads = it.next().ok_or_else(|| "missing value for --threads".to_string())?
-                    .parse::<usize>().map_err(|_| "invalid integer for --threads".to_string())?.max(1);
+                cfg.threads = it
+                    .next()
+                    .ok_or_else(|| "missing value for --threads".to_string())?
+                    .parse::<usize>()
+                    .map_err(|_| "invalid integer for --threads".to_string())?
+                    .max(1);
             }
             "--inflight" => {
-                cfg.inflight = it.next().ok_or_else(|| "missing value for --inflight".to_string())?
-                    .parse::<usize>().map_err(|_| "invalid integer for --inflight".to_string())?.max(1);
+                cfg.inflight = it
+                    .next()
+                    .ok_or_else(|| "missing value for --inflight".to_string())?
+                    .parse::<usize>()
+                    .map_err(|_| "invalid integer for --inflight".to_string())?
+                    .max(1);
             }
             "--help" | "-h" => return Err(usage().to_string()),
             other => return Err(format!("unknown arg: {other}\n\n{}", usage())),
@@ -169,7 +202,10 @@ icanact_remote::wire_type!(AfAskMsg, "icanact-examples.remote_compare.AfAskMsg/v
 struct AfBarrierMsg {
     phase: u8,
 }
-icanact_remote::wire_type!(AfBarrierMsg, "icanact-examples.remote_compare.AfBarrierMsg/v1");
+icanact_remote::wire_type!(
+    AfBarrierMsg,
+    "icanact-examples.remote_compare.AfBarrierMsg/v1"
+);
 
 #[derive(Clone)]
 struct AfServerHandler {
@@ -221,7 +257,11 @@ struct KameoTell {
 #[kameo::remote_message("remote_compare_tell")]
 impl KameoMessage<KameoTell> for KameoBenchActor {
     type Reply = ();
-    async fn handle(&mut self, _msg: KameoTell, _ctx: &mut KameoContext<Self, Self::Reply>) -> Self::Reply {
+    async fn handle(
+        &mut self,
+        _msg: KameoTell,
+        _ctx: &mut KameoContext<Self, Self::Reply>,
+    ) -> Self::Reply {
         self.delivered.fetch_add(1, Ordering::Relaxed);
     }
 }
@@ -234,7 +274,11 @@ struct KameoAsk {
 #[kameo::remote_message("remote_compare_ask")]
 impl KameoMessage<KameoAsk> for KameoBenchActor {
     type Reply = u64;
-    async fn handle(&mut self, msg: KameoAsk, _ctx: &mut KameoContext<Self, Self::Reply>) -> Self::Reply {
+    async fn handle(
+        &mut self,
+        msg: KameoAsk,
+        _ctx: &mut KameoContext<Self, Self::Reply>,
+    ) -> Self::Reply {
         self.delivered.fetch_add(1, Ordering::Relaxed);
         msg.v
     }
@@ -248,7 +292,11 @@ struct KameoBarrier {
 #[kameo::remote_message("remote_compare_barrier")]
 impl KameoMessage<KameoBarrier> for KameoBenchActor {
     type Reply = ();
-    async fn handle(&mut self, msg: KameoBarrier, _ctx: &mut KameoContext<Self, Self::Reply>) -> Self::Reply {
+    async fn handle(
+        &mut self,
+        msg: KameoBarrier,
+        _ctx: &mut KameoContext<Self, Self::Reply>,
+    ) -> Self::Reply {
         print_barrier("kameo", msg.phase, self.delivered.load(Ordering::Acquire));
     }
 }
@@ -379,12 +427,12 @@ fn client_af(
             tokio::time::sleep(Duration::from_millis(5)).await;
         };
         let tell_ref = NetworkRef::new(RemoteMailboxAddr::Remote(pid.clone()));
-        let warmup_tells: Vec<AfTellMsg> =
-            (0..cfg.warmup).map(|i| AfTellMsg { v: payload_at(i) }).collect();
-        let run_tells: Vec<AfTellMsg> =
-            (cfg.warmup..cfg.warmup + cfg.ops)
-                .map(|i| AfTellMsg { v: payload_at(i) })
-                .collect();
+        let warmup_tells: Vec<AfTellMsg> = (0..cfg.warmup)
+            .map(|i| AfTellMsg { v: payload_at(i) })
+            .collect();
+        let run_tells: Vec<AfTellMsg> = (cfg.warmup..cfg.warmup + cfg.ops)
+            .map(|i| AfTellMsg { v: payload_at(i) })
+            .collect();
         match cfg.workflow {
             Workflow::Tell => {
                 for msg in &warmup_tells {
@@ -418,9 +466,13 @@ fn client_af(
                         }
                     }
                 }
-                let barrier_ref = NetworkRef::new(RemoteMailboxAddr::Remote(
-                    RemoteTransportHandle::typed::<AfBarrierMsg>(pid.connection().clone(), actor_id),
-                ));
+                let barrier_ref =
+                    NetworkRef::new(RemoteMailboxAddr::Remote(RemoteTransportHandle::typed::<
+                        AfBarrierMsg,
+                    >(
+                        pid.connection().clone(),
+                        actor_id,
+                    )));
                 try_tell_network(&barrier_ref, AfBarrierMsg { phase: 0 })
                     .map_err(|e| icanact_remote::GossipError::InvalidConfig(format!("{e:?}")))?;
                 wait_barrier(
@@ -461,7 +513,9 @@ fn client_af(
                     let req = req.clone();
                     async move {
                         let mut pending: futures::stream::FuturesUnordered<
-                            std::pin::Pin<Box<dyn Future<Output = icanact_remote::Result<Bytes>> + Send>>,
+                            std::pin::Pin<
+                                Box<dyn Future<Output = icanact_remote::Result<Bytes>> + Send>,
+                            >,
                         > = futures::stream::FuturesUnordered::new();
                         let mut issued = 0u64;
                         while issued < count && pending.len() < cfg.inflight {
@@ -498,14 +552,25 @@ fn client_af(
     })
 }
 
-fn spawn_kameo_swarm(listen_addr: &str, dial_addr: Option<&str>, emit_ready: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn spawn_kameo_swarm(
+    listen_addr: &str,
+    dial_addr: Option<&str>,
+    emit_ready: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut swarm = SwarmBuilder::with_new_identity()
         .with_tokio()
-        .with_tcp(tcp::Config::default(), noise::Config::new, yamux::Config::default)?
+        .with_tcp(
+            tcp::Config::default(),
+            noise::Config::new,
+            yamux::Config::default,
+        )?
         .with_quic()
         .with_behaviour(|key| {
             let local_peer_id = key.public().to_peer_id();
-            let kameo = kameo::remote::Behaviour::new(local_peer_id, kameo::remote::messaging::Config::default());
+            let kameo = kameo::remote::Behaviour::new(
+                local_peer_id,
+                kameo::remote::messaging::Config::default(),
+            );
             let mdns = mdns::tokio::Behaviour::new(mdns::Config::default(), local_peer_id)?;
             Ok(KameoBenchBehaviour { kameo, mdns })
         })?
@@ -520,12 +585,16 @@ fn spawn_kameo_swarm(listen_addr: &str, dial_addr: Option<&str>, emit_ready: boo
     tokio::spawn(async move {
         loop {
             match swarm.select_next_some().await {
-                SwarmEvent::Behaviour(KameoBenchBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
+                SwarmEvent::Behaviour(KameoBenchBehaviourEvent::Mdns(mdns::Event::Discovered(
+                    list,
+                ))) => {
                     for (peer_id, multiaddr) in list {
                         swarm.add_peer_address(peer_id, multiaddr);
                     }
                 }
-                SwarmEvent::Behaviour(KameoBenchBehaviourEvent::Mdns(mdns::Event::Expired(list))) => {
+                SwarmEvent::Behaviour(KameoBenchBehaviourEvent::Mdns(mdns::Event::Expired(
+                    list,
+                ))) => {
                     for (peer_id, _multiaddr) in list {
                         let _ = swarm.disconnect_peer_id(peer_id);
                     }
@@ -564,7 +633,9 @@ fn client_kameo(
         spawn_kameo_swarm(cfg.kameo_client_addr, Some(server_addr), false)?;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         let remote_ref = loop {
-            if let Some(actor) = KameoRemoteActorRef::<KameoBenchActor>::lookup(KAMEO_SERVICE).await? {
+            if let Some(actor) =
+                KameoRemoteActorRef::<KameoBenchActor>::lookup(KAMEO_SERVICE).await?
+            {
                 break actor;
             }
             if tokio::time::Instant::now() >= deadline {
@@ -579,7 +650,9 @@ fn client_kameo(
             loop {
                 match remote_ref.ask(&KameoAsk { v }).send().await {
                     Ok(out) => return Ok(out),
-                    Err(err) if err.to_string().contains("max sub-streams reached") => std::thread::yield_now(),
+                    Err(err) if err.to_string().contains("max sub-streams reached") => {
+                        std::thread::yield_now()
+                    }
                     Err(err) => return Err(err.into()),
                 }
             }
@@ -592,7 +665,9 @@ fn client_kameo(
             loop {
                 match remote_ref.tell(msg).send() {
                     Ok(()) => return Ok(()),
-                    Err(err) if err.to_string().contains("max sub-streams reached") => std::thread::yield_now(),
+                    Err(err) if err.to_string().contains("max sub-streams reached") => {
+                        std::thread::yield_now()
+                    }
                     Err(err) => return Err(err.into()),
                 }
             }
@@ -612,12 +687,12 @@ fn client_kameo(
                 }
             }
         }
-        let warmup_tells: Vec<KameoTell> =
-            (0..cfg.warmup).map(|i| KameoTell { v: payload_at(i) }).collect();
-        let run_tells: Vec<KameoTell> =
-            (cfg.warmup..cfg.warmup + cfg.ops)
-                .map(|i| KameoTell { v: payload_at(i) })
-                .collect();
+        let warmup_tells: Vec<KameoTell> = (0..cfg.warmup)
+            .map(|i| KameoTell { v: payload_at(i) })
+            .collect();
+        let run_tells: Vec<KameoTell> = (cfg.warmup..cfg.warmup + cfg.ops)
+            .map(|i| KameoTell { v: payload_at(i) })
+            .collect();
         match cfg.workflow {
             Workflow::Tell => {
                 for msg in &warmup_tells {
@@ -660,7 +735,13 @@ fn client_kameo(
                     let remote_ref = remote_ref.clone();
                     async move {
                         let mut pending: futures::stream::FuturesUnordered<
-                            std::pin::Pin<Box<dyn Future<Output = Result<(u64, u64), Box<dyn std::error::Error>>> + Send>>,
+                            std::pin::Pin<
+                                Box<
+                                    dyn Future<
+                                            Output = Result<(u64, u64), Box<dyn std::error::Error>>,
+                                        > + Send,
+                                >,
+                            >,
                         > = futures::stream::FuturesUnordered::new();
                         let mut next = 0u64;
                         while next < count && pending.len() < cfg.inflight {
@@ -706,14 +787,18 @@ fn spawn_server(
     assert_optimized_bench_binary();
     let exe = std::env::current_exe().expect("bench exe");
     let mut child = Command::new(exe)
-        .arg("--role").arg(role)
-        .arg("--workflow").arg(match workflow {
+        .arg("--role")
+        .arg(role)
+        .arg("--workflow")
+        .arg(match workflow {
             Workflow::Tell => "tell",
             Workflow::TellConfirm => "tell-confirm",
             Workflow::Ask => "ask",
         })
-        .arg("--threads").arg(threads.to_string())
-        .arg("--inflight").arg(inflight.to_string())
+        .arg("--threads")
+        .arg(threads.to_string())
+        .arg("--inflight")
+        .arg(inflight.to_string())
         .stdout(Stdio::piped())
         .spawn()
         .expect("spawn server child");
@@ -780,7 +865,9 @@ fn wait_barrier(
             }
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return Err(format!("{framework} server stdout disconnected before barrier").into())
+                return Err(
+                    format!("{framework} server stdout disconnected before barrier").into(),
+                );
             }
         }
     }
@@ -806,8 +893,7 @@ fn run_runner(cfg: &Config) {
     let mut rows: Vec<(String, f64)> = Vec::new();
 
     if matches!(cfg.framework, Framework::Af | Framework::Both) {
-        let (child, ready, rx) =
-            spawn_server("server-af", cfg.workflow, cfg.threads, cfg.inflight);
+        let (child, ready, rx) = spawn_server("server-af", cfg.workflow, cfg.threads, cfg.inflight);
         let addr: SocketAddr = parse_ready_value(&ready, "addr").parse().expect("af addr");
         let peer = parse_ready_value(&ready, "peer");
         let barrier_rx = matches!(cfg.workflow, Workflow::TellConfirm).then_some(&rx);

@@ -5,15 +5,17 @@ use std::sync::Once;
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
-use kameo::actor::{ActorRef as KameoActorRef, RemoteActorRef as KameoRemoteActorRef, Spawn as KameoSpawn};
+use kameo::actor::{
+    ActorRef as KameoActorRef, RemoteActorRef as KameoRemoteActorRef, Spawn as KameoSpawn,
+};
 use kameo::message::{Context as KameoContext, Message as KameoMessage};
 use libp2p::swarm::{NetworkBehaviour, SwarmEvent};
 use libp2p::{Multiaddr, SwarmBuilder, mdns, noise, tcp, yamux};
-use ractor_cluster::{NodeServer, RactorClusterMessage, client_connect};
 use ractor::{
     Actor as RactorActor, ActorProcessingErr as RactorActorProcessingErr,
     ActorRef as RactorActorRef, RpcReplyPort,
 };
+use ractor_cluster::{NodeServer, RactorClusterMessage, client_connect};
 
 const KAMEO_SERVICE: &str = "bench/kameo/remote_ask_compare/v1";
 const RACTOR_SERVICE: &str = "bench/ractor/remote_ask_compare/v1";
@@ -33,7 +35,9 @@ impl Framework {
             "kameo" => Ok(Self::Kameo),
             "ractor" => Ok(Self::Ractor),
             "both" => Ok(Self::Both),
-            other => Err(format!("invalid --framework '{other}', expected kameo|ractor|both")),
+            other => Err(format!(
+                "invalid --framework '{other}', expected kameo|ractor|both"
+            )),
         }
     }
 }
@@ -96,7 +100,11 @@ fn parse_config() -> Result<Config, String> {
         match arg.as_str() {
             "--bench" => {}
             "--role" => {
-                cfg.role = match it.next().ok_or_else(|| "missing value for --role".to_string())?.as_str() {
+                cfg.role = match it
+                    .next()
+                    .ok_or_else(|| "missing value for --role".to_string())?
+                    .as_str()
+                {
                     "server-kameo" => Role::ServerKameo,
                     "server-ractor" => Role::ServerRactor,
                     other => return Err(format!("invalid role: {other}")),
@@ -104,7 +112,8 @@ fn parse_config() -> Result<Config, String> {
             }
             "--framework" => {
                 cfg.framework = Framework::parse(
-                    &it.next().ok_or_else(|| "missing value for --framework".to_string())?,
+                    &it.next()
+                        .ok_or_else(|| "missing value for --framework".to_string())?,
                 )?;
             }
             "--ops" => {
@@ -216,12 +225,18 @@ fn spawn_kameo_swarm(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut swarm = SwarmBuilder::with_new_identity()
         .with_tokio()
-        .with_tcp(tcp::Config::default(), noise::Config::new, yamux::Config::default)?
+        .with_tcp(
+            tcp::Config::default(),
+            noise::Config::new,
+            yamux::Config::default,
+        )?
         .with_quic()
         .with_behaviour(|key| {
             let local_peer_id = key.public().to_peer_id();
-            let kameo =
-                kameo::remote::Behaviour::new(local_peer_id, kameo::remote::messaging::Config::default());
+            let kameo = kameo::remote::Behaviour::new(
+                local_peer_id,
+                kameo::remote::messaging::Config::default(),
+            );
             let mdns = mdns::tokio::Behaviour::new(mdns::Config::default(), local_peer_id)?;
             Ok(KameoBenchBehaviour { kameo, mdns })
         })?
@@ -236,12 +251,16 @@ fn spawn_kameo_swarm(
     tokio::spawn(async move {
         loop {
             match swarm.select_next_some().await {
-                SwarmEvent::Behaviour(KameoBenchBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
+                SwarmEvent::Behaviour(KameoBenchBehaviourEvent::Mdns(mdns::Event::Discovered(
+                    list,
+                ))) => {
                     for (peer_id, multiaddr) in list {
                         swarm.add_peer_address(peer_id, multiaddr);
                     }
                 }
-                SwarmEvent::Behaviour(KameoBenchBehaviourEvent::Mdns(mdns::Event::Expired(list))) => {
+                SwarmEvent::Behaviour(KameoBenchBehaviourEvent::Mdns(mdns::Event::Expired(
+                    list,
+                ))) => {
                     for (peer_id, _multiaddr) in list {
                         let _ = swarm.disconnect_peer_id(peer_id);
                     }
@@ -274,7 +293,9 @@ fn client_kameo(cfg: &Config, server_addr: &str) -> Result<f64, Box<dyn std::err
         spawn_kameo_swarm(cfg.kameo_client_addr, Some(server_addr), false)?;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         let remote_ref = loop {
-            if let Some(actor) = KameoRemoteActorRef::<KameoBenchActor>::lookup(KAMEO_SERVICE).await? {
+            if let Some(actor) =
+                KameoRemoteActorRef::<KameoBenchActor>::lookup(KAMEO_SERVICE).await?
+            {
                 break actor;
             }
             if tokio::time::Instant::now() >= deadline {
@@ -290,7 +311,9 @@ fn client_kameo(cfg: &Config, server_addr: &str) -> Result<f64, Box<dyn std::err
             loop {
                 match remote_ref.ask(&KameoAsk { v }).send().await {
                     Ok(out) => return Ok(out),
-                    Err(err) if err.to_string().contains("max sub-streams reached") => std::thread::yield_now(),
+                    Err(err) if err.to_string().contains("max sub-streams reached") => {
+                        std::thread::yield_now()
+                    }
                     Err(err) => return Err(err.into()),
                 }
             }
@@ -356,15 +379,13 @@ fn server_ractor(cfg: &Config) -> Result<(), Box<dyn std::error::Error>> {
             None,
         )
         .with_listen_addr(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
-        let (_node_ref, _node_handle) =
-            ractor::Actor::spawn(None, node, ()).await.expect("spawn ractor node server");
-        let (actor, _handle) = ractor::Actor::spawn(
-            Some(RACTOR_SERVICE.to_string()),
-            RactorBenchActor,
-            (),
-        )
-        .await
-        .expect("spawn ractor remote actor");
+        let (_node_ref, _node_handle) = ractor::Actor::spawn(None, node, ())
+            .await
+            .expect("spawn ractor node server");
+        let (actor, _handle) =
+            ractor::Actor::spawn(Some(RACTOR_SERVICE.to_string()), RactorBenchActor, ())
+                .await
+                .expect("spawn ractor remote actor");
         ractor::pg::join(RACTOR_GROUP.to_string(), vec![actor.get_cell()]);
         tokio::time::sleep(Duration::from_millis(250)).await;
         print_ready(&format!(
@@ -388,8 +409,9 @@ fn client_ractor(cfg: &Config, server_addr: &str) -> Result<f64, Box<dyn std::er
             None,
         )
         .with_listen_addr(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
-        let (node_ref, _node_handle) =
-            ractor::Actor::spawn(None, node, ()).await.expect("spawn ractor client node");
+        let (node_ref, _node_handle) = ractor::Actor::spawn(None, node, ())
+            .await
+            .expect("spawn ractor client node");
 
         client_connect(&node_ref, server_addr).await?;
 
@@ -401,7 +423,9 @@ fn client_ractor(cfg: &Config, server_addr: &str) -> Result<f64, Box<dyn std::er
                 break remote_ref;
             }
             if tokio::time::Instant::now() >= deadline {
-                return Err::<f64, Box<dyn std::error::Error>>("ractor group lookup timeout".into());
+                return Err::<f64, Box<dyn std::error::Error>>(
+                    "ractor group lookup timeout".into(),
+                );
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         };

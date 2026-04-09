@@ -4,9 +4,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-use actix::prelude::{
-    Actor as ActixActor, Handler, SyncArbiter, SyncContext, System,
-};
+use actix::prelude::{Actor as ActixActor, Handler, SyncArbiter, SyncContext, System};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use icanact_core::local_sync as af_sync;
 use kameo::actor::Spawn as KameoSpawn;
@@ -135,15 +133,15 @@ fn run_af_tell(cfg: Config, iters: u64) -> Duration {
     });
 
     let start = Instant::now();
-        for _ in 0..iters {
-            processed.store(0, Ordering::Relaxed);
-            for _ in 0..cfg.tell_ops {
-                while !addr.tell(1) {
-                    std::hint::spin_loop();
-                }
+    for _ in 0..iters {
+        processed.store(0, Ordering::Relaxed);
+        for _ in 0..cfg.tell_ops {
+            while !addr.tell(1) {
+                std::hint::spin_loop();
             }
-            while processed.load(Ordering::Relaxed) < cfg.tell_ops {
-                std::thread::yield_now();
+        }
+        while processed.load(Ordering::Relaxed) < cfg.tell_ops {
+            std::thread::yield_now();
         }
     }
     let elapsed = start.elapsed();
@@ -217,17 +215,17 @@ fn run_af_ask(cfg: Config, iters: u64) -> Duration {
     });
 
     let start = Instant::now();
-        for _ in 0..iters {
-            for i in 0..cfg.ask_ops {
-                let out = addr
-                    .ask_timeout(
-                        |reply| AfAskMsg::Echo { v: i, reply },
-                        Duration::from_secs(5),
-                    )
-                    .expect("af ask failed");
-                assert_eq!(out, i);
-            }
+    for _ in 0..iters {
+        for i in 0..cfg.ask_ops {
+            let out = addr
+                .ask_timeout(
+                    |reply| AfAskMsg::Echo { v: i, reply },
+                    Duration::from_secs(5),
+                )
+                .expect("af ask failed");
+            assert_eq!(out, i);
         }
+    }
     let elapsed = start.elapsed();
     handle.shutdown();
     elapsed
@@ -278,9 +276,12 @@ fn bench_kameo_compare(c: &mut Criterion) {
     let mut tell_group = c.benchmark_group("tell_compare_af_actix_kameo");
     tell_group.sample_size(cfg.sample_size);
     tell_group.throughput(Throughput::Elements(cfg.tell_ops));
-    tell_group.bench_function(BenchmarkId::new("actor_framework_sync", cfg.tell_ops), |b| {
-        b.iter_custom(|iters| run_af_tell(cfg, iters));
-    });
+    tell_group.bench_function(
+        BenchmarkId::new("actor_framework_sync", cfg.tell_ops),
+        |b| {
+            b.iter_custom(|iters| run_af_tell(cfg, iters));
+        },
+    );
     tell_group.bench_function(BenchmarkId::new("actix_sync", cfg.tell_ops), |b| {
         b.iter_custom(|iters| run_actix_tell(cfg, iters));
     });

@@ -156,9 +156,8 @@ fn build_payloads() -> Arc<Vec<Bytes>> {
     let mut payloads = Vec::with_capacity(PAYLOADS);
     for idx in 0..PAYLOADS {
         let lane = idx & 1;
-        let s = format!(
-            "{{\"sym\":\"SYM{lane}\",\"ts\":1700000000000,\"price\":123.45,\"qty\":0.67}}"
-        );
+        let s =
+            format!("{{\"sym\":\"SYM{lane}\",\"ts\":1700000000000,\"price\":123.45,\"qty\":0.67}}");
         payloads.push(Bytes::from(s));
     }
     Arc::new(payloads)
@@ -236,7 +235,12 @@ fn spawn_typed_actors(
         let processed = Arc::clone(processed);
         let latency = Arc::clone(latency);
         let (addr, handle) = local_sync::mpsc::spawn(cap, move |msg: TypedTradeMsg| {
-            std::hint::black_box((msg.trade.symbol, msg.trade.ts_ms, msg.trade.price, msg.trade.qty));
+            std::hint::black_box((
+                msg.trade.symbol,
+                msg.trade.ts_ms,
+                msg.trade.price,
+                msg.trade.qty,
+            ));
             if let Some(sampled_at) = msg.sampled_at {
                 latency.record(sampled_at.elapsed().as_nanos() as u64);
             }
@@ -265,9 +269,7 @@ fn route_lane_from_json_bytes(payload: &[u8]) -> usize {
     )
 }
 
-async fn run_raw_bytes_route_2sync(
-    cfg: Config,
-) -> (std::time::Duration, std::time::Duration, u64) {
+async fn run_raw_bytes_route_2sync(cfg: Config) -> (std::time::Duration, std::time::Duration, u64) {
     let payloads = build_payloads();
     let processed = Arc::new(AtomicU64::new(0));
     let latency = Arc::new(LatencyBuf::new(((cfg.msgs / 1024).max(1)) as usize + 1));
@@ -335,14 +337,19 @@ async fn run_raw_bytes_route_2sync(
     let cpu = cpu_time().saturating_sub(cpu0);
     let stats = alloc_snapshot();
     print_alloc_stats_row("raw_bytes_route_2sync", cfg.msgs, &stats);
-    print_latency_row("raw_bytes_route_2sync_latency", &latency_stats_from_nanos(latency.collect()));
+    print_latency_row(
+        "raw_bytes_route_2sync_latency",
+        &latency_stats_from_nanos(latency.collect()),
+    );
     for handle in handles {
         handle.shutdown();
     }
     (wall, cpu, cfg.msgs)
 }
 
-async fn run_owned_json_route_2sync(cfg: Config) -> (std::time::Duration, std::time::Duration, u64) {
+async fn run_owned_json_route_2sync(
+    cfg: Config,
+) -> (std::time::Duration, std::time::Duration, u64) {
     let payloads = build_payloads();
     let processed = Arc::new(AtomicU64::new(0));
     let latency = Arc::new(LatencyBuf::new(((cfg.msgs / 1024).max(1)) as usize + 1));
@@ -412,7 +419,10 @@ async fn run_owned_json_route_2sync(cfg: Config) -> (std::time::Duration, std::t
     let cpu = cpu_time().saturating_sub(cpu0);
     let stats = alloc_snapshot();
     print_alloc_stats_row("owned_json_route_2sync", cfg.msgs, &stats);
-    print_latency_row("owned_json_route_2sync_latency", &latency_stats_from_nanos(latency.collect()));
+    print_latency_row(
+        "owned_json_route_2sync_latency",
+        &latency_stats_from_nanos(latency.collect()),
+    );
     for handle in handles {
         handle.shutdown();
     }
@@ -489,7 +499,10 @@ async fn run_typed_struct_route_2sync(
     let cpu = cpu_time().saturating_sub(cpu0);
     let stats = alloc_snapshot();
     print_alloc_stats_row("typed_struct_route_2sync", cfg.msgs, &stats);
-    print_latency_row("typed_struct_route_2sync_latency", &latency_stats_from_nanos(latency.collect()));
+    print_latency_row(
+        "typed_struct_route_2sync_latency",
+        &latency_stats_from_nanos(latency.collect()),
+    );
     for handle in handles {
         handle.shutdown();
     }

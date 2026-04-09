@@ -229,8 +229,11 @@ fn main() {
             &delivered,
             &full,
         );
-        wait_deliveries(expected_deliveries(cfg.msgs, cfg.subs_per_topic), &delivered_counter)
-            .await;
+        wait_deliveries(
+            expected_deliveries(cfg.msgs, cfg.subs_per_topic),
+            &delivered_counter,
+        )
+        .await;
 
         System::current().stop();
     });
@@ -249,7 +252,10 @@ fn main() {
         cfg.topics, cfg.subs_per_topic, cfg.msgs, cfg.warmup
     );
     println!("cap: {}  hot_topic: {}", cfg.cap, cfg.hot_topic);
-    println!("stats: attempted={} delivered={} full={}", attempted_v, delivered_v, full_v);
+    println!(
+        "stats: attempted={} delivered={} full={}",
+        attempted_v, delivered_v, full_v
+    );
     println!(
         "wall: {}  cpu: {}  cpu_util: {:.2}",
         fmt_duration(wall),
