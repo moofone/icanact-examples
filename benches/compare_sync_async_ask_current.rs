@@ -1,6 +1,6 @@
 use actix::{
-    Actor as ActixActor, Context as ActixContext, Handler as ActixHandler,
-    Message as ActixMessage, SyncArbiter, SyncContext, System,
+    Actor as ActixActor, Context as ActixContext, Handler as ActixHandler, Message as ActixMessage,
+    SyncArbiter, SyncContext, System,
 };
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use icanact_core::local_async::{self, AsyncActor};
@@ -37,9 +37,14 @@ fn parse_usize_env(key: &str, default: usize) -> usize {
 
 impl Config {
     fn from_env() -> Self {
+        let ops = parse_u64_env("AF_CMP_SYNC_ASYNC_ASK_OPS", 100_000).max(1);
         Self {
-            ops: parse_u64_env("AF_CMP_SYNC_ASYNC_ASK_OPS", 100_000).max(1),
-            async_mailbox_cap: parse_usize_env("AF_CMP_ASYNC_MAILBOX_CAP", 65_536).max(1),
+            ops,
+            async_mailbox_cap: parse_usize_env(
+                "AF_CMP_ASYNC_MAILBOX_CAP",
+                usize::try_from(ops).unwrap_or(1_000_000).max(1_000_000),
+            )
+            .max(1),
             sample_size: parse_usize_env("AF_CMP_SAMPLE_SIZE", 10).clamp(10, 100),
             warmup_ms: parse_u64_env("AF_CMP_WARMUP_MS", 150),
             measurement_ms: parse_u64_env("AF_CMP_MEASUREMENT_MS", 700),
@@ -66,6 +71,9 @@ impl AsyncActor for AfAsyncWorker {
     type Tell = AfAsyncReq;
     type Ask = ();
     type Reply = ();
+    type Channel = ();
+    type PubSub = ();
+    type Broadcast = ();
 
     #[inline(always)]
     async fn handle_tell(&mut self, msg: Self::Tell) {
@@ -138,19 +146,16 @@ fn run_af_sync_async_ask(cfg: Config, iters: u64) -> Duration {
     rt.block_on(async move {
         let processed = Arc::new(AtomicU64::new(0));
         let checksum = Arc::new(AtomicU64::new(0));
-        let (sink_addr, sink_handle) = local_sync::mpsc::spawn(
-            cfg.async_mailbox_cap,
-            {
-                let processed = Arc::clone(&processed);
-                let checksum = Arc::clone(&checksum);
-                move |msg: AfSyncSinkMsg| match msg {
-                    AfSyncSinkMsg::Done(v) => {
-                        processed.fetch_add(1, Ordering::Relaxed);
-                        checksum.fetch_add(v, Ordering::Relaxed);
-                    }
+        let (sink_addr, sink_handle) = local_sync::mpsc::spawn(cfg.async_mailbox_cap, {
+            let processed = Arc::clone(&processed);
+            let checksum = Arc::clone(&checksum);
+            move |msg: AfSyncSinkMsg| match msg {
+                AfSyncSinkMsg::Done(v) => {
+                    processed.fetch_add(1, Ordering::Relaxed);
+                    checksum.fetch_add(v, Ordering::Relaxed);
                 }
-            },
-        );
+            }
+        });
         let (worker_ref, worker_handle) = local_async::spawn_with_opts(
             AfAsyncWorker,
             local_async::SpawnOpts {
@@ -162,7 +167,8 @@ fn run_af_sync_async_ask(cfg: Config, iters: u64) -> Duration {
 
         let warmup = ops.min(10_000);
         for i in 0..warmup {
-            while !worker_ref.tell_result_to(&sink_addr, |reply| AfAsyncReq::Fetch { v: i, reply }) {
+            while !worker_ref.tell_result_to(&sink_addr, |reply| AfAsyncReq::Fetch { v: i, reply })
+            {
                 tokio::task::yield_now().await;
             }
         }
@@ -225,7 +231,9 @@ fn run_actix_sync_async_ask(cfg: Config, iters: u64) -> Duration {
                 }) {
                     Ok(()) => break,
                     Err(actix::prelude::SendError::Full(_)) => tokio::task::yield_now().await,
-                    Err(actix::prelude::SendError::Closed(_)) => panic!("actix async worker closed"),
+                    Err(actix::prelude::SendError::Closed(_)) => {
+                        panic!("actix async worker closed")
+                    }
                 }
             }
         }

@@ -1,18 +1,18 @@
 use actix::{
-    Actor as ActixActor, Context as ActixContext, Handler as ActixHandler,
-    Message as ActixMessage, System,
+    Actor as ActixActor, Context as ActixContext, Handler as ActixHandler, Message as ActixMessage,
+    System,
 };
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use icanact_core::local_async::{self, AsyncActor};
 use kameo::actor::Spawn as KameoSpawn;
 use kameo::mailbox;
 use kameo::message::{Context as KameoContext, Message as KameoMessage};
-use rand::rngs::SmallRng;
-use rand::{RngCore, SeedableRng};
 use ractor::{
     Actor as RactorActor, ActorProcessingErr as RactorActorProcessingErr,
     ActorRef as RactorActorRef,
 };
+use rand::rngs::SmallRng;
+use rand::{RngCore, SeedableRng};
 use std::hint::black_box;
 use std::sync::{
     Arc,
@@ -65,6 +65,19 @@ fn split_ops(total: u64, producers: usize) -> Vec<u64> {
         .collect()
 }
 
+fn split_ranges(total: u64, producers: usize) -> Vec<(usize, usize)> {
+    let mut start = 0usize;
+    split_ops(total, producers)
+        .into_iter()
+        .map(|len| {
+            let len = len as usize;
+            let range = (start, start + len);
+            start += len;
+            range
+        })
+        .collect()
+}
+
 fn make_values(n: u64, seed: u64) -> Vec<u64> {
     let mut rng = SmallRng::seed_from_u64(seed);
     let mut out = Vec::with_capacity(n as usize);
@@ -72,6 +85,23 @@ fn make_values(n: u64, seed: u64) -> Vec<u64> {
         out.push(rng.next_u64());
     }
     out
+}
+
+fn expected_sum(values: &[u64]) -> u64 {
+    values.iter().copied().fold(0u64, u64::wrapping_add)
+}
+
+async fn wait_for_async_completion(
+    processed: &AtomicU64,
+    checksum: &AtomicU64,
+    expected_count: u64,
+    expected_sum: u64,
+) {
+    while processed.load(Ordering::Relaxed) < expected_count
+        || checksum.load(Ordering::Relaxed) != expected_sum
+    {
+        tokio::task::yield_now().await;
+    }
 }
 
 struct AfAsyncTellActor {
@@ -84,6 +114,9 @@ impl AsyncActor for AfAsyncTellActor {
     type Tell = u64;
     type Ask = ();
     type Reply = ();
+    type Channel = ();
+    type PubSub = ();
+    type Broadcast = ();
 
     #[inline(always)]
     async fn handle_tell(&mut self, msg: Self::Tell) {
@@ -188,6 +221,8 @@ fn run_af_async_tell(cfg: Config, iters: u64) -> Duration {
     let producers = cfg.producers;
     let warmup_vals = Arc::new(make_values(cfg.ops.min(10_000), 0x101));
     let bench_vals = Arc::new(make_values(cfg.ops, 0x202));
+    let warmup_sum = expected_sum(warmup_vals.as_slice());
+    let bench_sum = expected_sum(bench_vals.as_slice());
     let rt = async_runtime_builder(producers)
         .enable_time()
         .build()
@@ -207,7 +242,7 @@ fn run_af_async_tell(cfg: Config, iters: u64) -> Duration {
             },
         )
         .await;
-        let per_producer = split_ops(ops, producers);
+        let ranges = split_ranges(ops, producers);
 
         let warmup = warmup_vals.len() as u64;
         for &v in warmup_vals.iter() {
@@ -215,20 +250,19 @@ fn run_af_async_tell(cfg: Config, iters: u64) -> Duration {
                 tokio::task::yield_now().await;
             }
         }
-        while processed.load(Ordering::Relaxed) < warmup {
-            tokio::task::yield_now().await;
-        }
+        wait_for_async_completion(&processed, &checksum, warmup, warmup_sum).await;
+        assert_eq!(checksum.swap(0, Ordering::Relaxed), warmup_sum);
 
         let t0 = Instant::now();
         for _ in 0..iters {
             processed.store(0, Ordering::Relaxed);
             checksum.store(0, Ordering::Relaxed);
             let mut joins = Vec::with_capacity(producers);
-            for ops in per_producer.iter().copied() {
+            for (start, end) in ranges.iter().copied() {
                 let addr = addr.clone();
                 let bench_vals = Arc::clone(&bench_vals);
                 joins.push(tokio::spawn(async move {
-                    for idx in 0..ops as usize {
+                    for idx in start..end {
                         while !addr.tell(bench_vals[idx]) {
                             tokio::task::yield_now().await;
                         }
@@ -238,10 +272,9 @@ fn run_af_async_tell(cfg: Config, iters: u64) -> Duration {
             for join in joins {
                 join.await.expect("actor-framework async producer panicked");
             }
-            while processed.load(Ordering::Relaxed) < ops {
-                tokio::task::yield_now().await;
-            }
+            wait_for_async_completion(&processed, &checksum, ops, bench_sum).await;
             black_box(checksum.load(Ordering::Relaxed));
+            assert_eq!(checksum.load(Ordering::Relaxed), bench_sum);
         }
         let elapsed = t0.elapsed();
         handle.shutdown().await;
@@ -254,6 +287,8 @@ fn run_actix_async_tell(cfg: Config, iters: u64) -> Duration {
     let producers = cfg.producers;
     let warmup_vals = Arc::new(make_values(cfg.ops.min(10_000), 0x303));
     let bench_vals = Arc::new(make_values(cfg.ops, 0x404));
+    let warmup_sum = expected_sum(warmup_vals.as_slice());
+    let bench_sum = expected_sum(bench_vals.as_slice());
     let sys = System::new();
 
     sys.block_on(async move {
@@ -265,26 +300,25 @@ fn run_actix_async_tell(cfg: Config, iters: u64) -> Duration {
             mailbox_cap: cfg.mailbox_cap,
         }
         .start();
-        let per_producer = split_ops(ops, producers);
+        let ranges = split_ranges(ops, producers);
 
         let warmup = warmup_vals.len() as u64;
         for &v in warmup_vals.iter() {
             addr.do_send(ActixTellMsg(v));
         }
-        while processed.load(Ordering::Relaxed) < warmup {
-            tokio::task::yield_now().await;
-        }
+        wait_for_async_completion(&processed, &checksum, warmup, warmup_sum).await;
+        assert_eq!(checksum.swap(0, Ordering::Relaxed), warmup_sum);
 
         let t0 = Instant::now();
         for _ in 0..iters {
             processed.store(0, Ordering::Relaxed);
             checksum.store(0, Ordering::Relaxed);
             let mut joins = Vec::with_capacity(producers);
-            for ops in per_producer.iter().copied() {
+            for (start, end) in ranges.iter().copied() {
                 let addr = addr.clone();
                 let bench_vals = Arc::clone(&bench_vals);
                 joins.push(std::thread::spawn(move || {
-                    for idx in 0..ops as usize {
+                    for idx in start..end {
                         addr.do_send(ActixTellMsg(bench_vals[idx]));
                     }
                 }));
@@ -292,10 +326,9 @@ fn run_actix_async_tell(cfg: Config, iters: u64) -> Duration {
             for join in joins {
                 join.join().expect("actix async producer panicked");
             }
-            while processed.load(Ordering::Relaxed) < ops {
-                tokio::task::yield_now().await;
-            }
+            wait_for_async_completion(&processed, &checksum, ops, bench_sum).await;
             black_box(checksum.load(Ordering::Relaxed));
+            assert_eq!(checksum.load(Ordering::Relaxed), bench_sum);
         }
         t0.elapsed()
     })
@@ -306,6 +339,8 @@ fn run_ractor_async_tell(cfg: Config, iters: u64) -> Duration {
     let producers = cfg.producers;
     let warmup_vals = Arc::new(make_values(cfg.ops.min(10_000), 0x505));
     let bench_vals = Arc::new(make_values(cfg.ops, 0x606));
+    let warmup_sum = expected_sum(warmup_vals.as_slice());
+    let bench_sum = expected_sum(bench_vals.as_slice());
     let rt = async_runtime_builder(producers)
         .enable_time()
         .build()
@@ -314,35 +349,33 @@ fn run_ractor_async_tell(cfg: Config, iters: u64) -> Duration {
     rt.block_on(async move {
         let processed = Arc::new(AtomicU64::new(0));
         let checksum = Arc::new(AtomicU64::new(0));
-        let (addr, handle) =
-            RactorAsyncTellActor::spawn(
-                None,
-                RactorAsyncTellActor,
-                (Arc::clone(&processed), Arc::clone(&checksum)),
-            )
-                .await
-                .expect("failed to spawn ractor async actor");
-        let per_producer = split_ops(ops, producers);
+        let (addr, handle) = RactorAsyncTellActor::spawn(
+            None,
+            RactorAsyncTellActor,
+            (Arc::clone(&processed), Arc::clone(&checksum)),
+        )
+        .await
+        .expect("failed to spawn ractor async actor");
+        let ranges = split_ranges(ops, producers);
 
         let warmup = warmup_vals.len() as u64;
         for &v in warmup_vals.iter() {
             addr.send_message(v)
                 .expect("ractor async tell warmup send failed");
         }
-        while processed.load(Ordering::Relaxed) < warmup {
-            tokio::task::yield_now().await;
-        }
+        wait_for_async_completion(&processed, &checksum, warmup, warmup_sum).await;
+        assert_eq!(checksum.swap(0, Ordering::Relaxed), warmup_sum);
 
         let t0 = Instant::now();
         for _ in 0..iters {
             processed.store(0, Ordering::Relaxed);
             checksum.store(0, Ordering::Relaxed);
             let mut joins = Vec::with_capacity(producers);
-            for ops in per_producer.iter().copied() {
+            for (start, end) in ranges.iter().copied() {
                 let addr = addr.clone();
                 let bench_vals = Arc::clone(&bench_vals);
                 joins.push(tokio::task::spawn_blocking(move || {
-                    for idx in 0..ops as usize {
+                    for idx in start..end {
                         addr.send_message(bench_vals[idx])
                             .expect("ractor async tell send failed");
                     }
@@ -351,10 +384,9 @@ fn run_ractor_async_tell(cfg: Config, iters: u64) -> Duration {
             for join in joins {
                 join.await.expect("ractor async producer panicked");
             }
-            while processed.load(Ordering::Relaxed) < ops {
-                tokio::task::yield_now().await;
-            }
+            wait_for_async_completion(&processed, &checksum, ops, bench_sum).await;
             black_box(checksum.load(Ordering::Relaxed));
+            assert_eq!(checksum.load(Ordering::Relaxed), bench_sum);
         }
         let elapsed = t0.elapsed();
         addr.stop(None);
@@ -369,6 +401,8 @@ fn run_kameo_async_tell(cfg: Config, iters: u64) -> Duration {
     let producers = cfg.producers;
     let warmup_vals = Arc::new(make_values(cfg.ops.min(10_000), 0x707));
     let bench_vals = Arc::new(make_values(cfg.ops, 0x808));
+    let warmup_sum = expected_sum(warmup_vals.as_slice());
+    let bench_sum = expected_sum(bench_vals.as_slice());
     let rt = async_runtime_builder(producers)
         .enable_time()
         .build()
@@ -384,7 +418,7 @@ fn run_kameo_async_tell(cfg: Config, iters: u64) -> Duration {
             },
             mailbox::bounded(cap),
         );
-        let per_producer = split_ops(ops, producers);
+        let ranges = split_ranges(ops, producers);
 
         let warmup = warmup_vals.len() as u64;
         for &v in warmup_vals.iter() {
@@ -394,20 +428,19 @@ fn run_kameo_async_tell(cfg: Config, iters: u64) -> Duration {
                 .await
                 .expect("kameo tell warmup send failed");
         }
-        while processed.load(Ordering::Relaxed) < warmup {
-            tokio::task::yield_now().await;
-        }
+        wait_for_async_completion(&processed, &checksum, warmup, warmup_sum).await;
+        assert_eq!(checksum.swap(0, Ordering::Relaxed), warmup_sum);
 
         let t0 = Instant::now();
         for _ in 0..iters {
             processed.store(0, Ordering::Relaxed);
             checksum.store(0, Ordering::Relaxed);
             let mut joins = Vec::with_capacity(producers);
-            for ops in per_producer.iter().copied() {
+            for (start, end) in ranges.iter().copied() {
                 let actor_ref = actor_ref.clone();
                 let bench_vals = Arc::clone(&bench_vals);
                 joins.push(tokio::spawn(async move {
-                    for idx in 0..ops as usize {
+                    for idx in start..end {
                         actor_ref
                             .tell(KameoTellMsg(bench_vals[idx]))
                             .send()
@@ -419,10 +452,9 @@ fn run_kameo_async_tell(cfg: Config, iters: u64) -> Duration {
             for join in joins {
                 join.await.expect("kameo async producer panicked");
             }
-            while processed.load(Ordering::Relaxed) < ops {
-                tokio::task::yield_now().await;
-            }
+            wait_for_async_completion(&processed, &checksum, ops, bench_sum).await;
             black_box(checksum.load(Ordering::Relaxed));
+            assert_eq!(checksum.load(Ordering::Relaxed), bench_sum);
         }
         t0.elapsed()
     })

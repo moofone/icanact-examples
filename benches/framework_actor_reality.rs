@@ -6,11 +6,10 @@ use std::thread;
 use std::time::Instant;
 
 use actix::{
-    Actor as ActixActor, Context as ActixContext, Handler as ActixHandler,
-    Message as ActixMessage, SyncArbiter, SyncContext, System,
+    Actor as ActixActor, Context as ActixContext, Handler as ActixHandler, Message as ActixMessage,
+    SyncArbiter, SyncContext, System,
 };
 use icanact_core::local_async as af_async;
-use icanact_core::local_async::contract::SupportsTell;
 use icanact_core::local_sync as af_sync;
 use kameo::actor::Spawn as KameoSpawn;
 use kameo::mailbox;
@@ -61,7 +60,11 @@ impl Default for Config {
     }
 }
 
-fn parse_u64(name: &str, current: u64, it: &mut impl Iterator<Item = String>) -> Result<u64, String> {
+fn parse_u64(
+    name: &str,
+    current: u64,
+    it: &mut impl Iterator<Item = String>,
+) -> Result<u64, String> {
     it.next()
         .ok_or_else(|| format!("missing value for {name}"))?
         .parse::<u64>()
@@ -69,7 +72,11 @@ fn parse_u64(name: &str, current: u64, it: &mut impl Iterator<Item = String>) ->
         .map(|v| v.max(1).max(current.min(1)))
 }
 
-fn parse_usize(name: &str, current: usize, it: &mut impl Iterator<Item = String>) -> Result<usize, String> {
+fn parse_usize(
+    name: &str,
+    current: usize,
+    it: &mut impl Iterator<Item = String>,
+) -> Result<usize, String> {
     it.next()
         .ok_or_else(|| format!("missing value for {name}"))?
         .parse::<usize>()
@@ -97,7 +104,11 @@ fn parse_config() -> Result<Config, String> {
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--runtime" => {
-                cfg.runtime = match it.next().ok_or_else(|| "missing value for --runtime".to_string())?.as_str() {
+                cfg.runtime = match it
+                    .next()
+                    .ok_or_else(|| "missing value for --runtime".to_string())?
+                    .as_str()
+                {
                     "sync" => RuntimeKind::Sync,
                     "async" => RuntimeKind::Async,
                     "both" => RuntimeKind::Both,
@@ -105,7 +116,11 @@ fn parse_config() -> Result<Config, String> {
                 };
             }
             "--workflow" => {
-                cfg.workflow = match it.next().ok_or_else(|| "missing value for --workflow".to_string())?.as_str() {
+                cfg.workflow = match it
+                    .next()
+                    .ok_or_else(|| "missing value for --workflow".to_string())?
+                    .as_str()
+                {
                     "tell" => Workflow::Tell,
                     "mixed" => Workflow::Mixed,
                     other => return Err(format!("invalid workflow: {other}")),
@@ -113,7 +128,9 @@ fn parse_config() -> Result<Config, String> {
             }
             "--producers" => cfg.producers = parse_usize("--producers", cfg.producers, &mut it)?,
             "--ops" => cfg.ops = parse_u64("--ops", cfg.ops, &mut it)?,
-            "--mailbox-cap" => cfg.mailbox_cap = parse_usize("--mailbox-cap", cfg.mailbox_cap, &mut it)?,
+            "--mailbox-cap" => {
+                cfg.mailbox_cap = parse_usize("--mailbox-cap", cfg.mailbox_cap, &mut it)?
+            }
             "--ask-pct" => {
                 cfg.ask_pct = it
                     .next()
@@ -165,6 +182,10 @@ impl SharedState {
         self.checksum.fetch_add(out, Ordering::Relaxed);
         out
     }
+
+    fn take_checksum(&self) -> u64 {
+        self.checksum.swap(0, Ordering::Relaxed)
+    }
 }
 
 #[inline(always)]
@@ -194,6 +215,10 @@ fn split_ranges(total: u64, producers: usize) -> Vec<(u64, u64)> {
         start += len;
     }
     out
+}
+
+fn warmup_ops(total: u64) -> u64 {
+    total.min(1_024)
 }
 
 fn expected_checksum(cfg: Config) -> u64 {
@@ -251,6 +276,8 @@ enum SyncTellMsg {
     Tell(u64),
 }
 
+impl icanact_core::TellAskTell for SyncTellMsg {}
+
 enum SyncAskMsg {
     Ask(u64),
 }
@@ -259,13 +286,14 @@ struct AfSyncRealityActor {
     state: SharedState,
 }
 
-impl af_sync::SyncActor for AfSyncRealityActor {}
-
-impl af_sync::Actor for AfSyncRealityActor {
-    type ActorMailboxContract = af_sync::contract::TellAsk;
+impl af_sync::SyncActor for AfSyncRealityActor {
+    type Contract = af_sync::contract::TellAsk;
     type Tell = SyncTellMsg;
     type Ask = SyncAskMsg;
     type Reply = u64;
+    type Channel = ();
+    type PubSub = ();
+    type Broadcast = ();
 
     fn handle_tell(&mut self, msg: Self::Tell) {
         match msg {
@@ -279,6 +307,13 @@ impl af_sync::Actor for AfSyncRealityActor {
         match msg {
             SyncAskMsg::Ask(token) => self.state.apply(token),
         }
+    }
+}
+
+fn warmup_cfg(cfg: Config) -> Config {
+    Config {
+        ops: warmup_ops(cfg.ops),
+        ..cfg
     }
 }
 
@@ -316,36 +351,53 @@ impl ActixHandler<ActixSyncAskMsg> for ActixSyncRealityActor {
 
 fn run_af_sync(cfg: Config) -> ResultRow {
     let expected = expected_checksum(cfg);
+    let warmup_cfg = warmup_cfg(cfg);
+    let warmup_expected = expected_checksum(warmup_cfg);
     let mut runs = Vec::with_capacity(cfg.runs);
     for _ in 0..cfg.runs {
         let state = SharedState::new(cfg.work_iters);
         state.reset();
-        let started = Instant::now();
-        let mut handles = Vec::with_capacity(1);
-        let mut addrs = Vec::with_capacity(1);
-        for _ in 0..1 {
-            let (addr, handle) = af_sync::spawn_with_opts(
-                AfSyncRealityActor { state: state.clone() },
-                af_sync::SpawnOpts {
-                    mailbox_capacity: cfg.mailbox_cap,
-                    ..Default::default()
-                },
-            );
-            handle.wait_for_startup();
-            addrs.push(addr);
-            handles.push(handle);
+        let (addr, handle) = af_sync::spawn_with_opts(
+            AfSyncRealityActor {
+                state: state.clone(),
+            },
+            af_sync::SpawnOpts {
+                mailbox_capacity: cfg.mailbox_cap,
+                ..Default::default()
+            },
+        );
+        handle.wait_for_startup();
+        for token in 0..warmup_cfg.ops {
+            if cfg.workflow == Workflow::Mixed && is_ask(token, cfg.ask_pct) {
+                let out = addr
+                    .ask(SyncAskMsg::Ask(token))
+                    .expect("af sync warmup ask failed");
+                assert_eq!(out, work(token, cfg.work_iters));
+            } else {
+                let mut spins = 0u32;
+                while !addr.tell(SyncTellMsg::Tell(token)) {
+                    spin_then_yield(&mut spins);
+                }
+            }
         }
+        let mut spins = 0u32;
+        while state.processed.load(Ordering::Relaxed) < warmup_cfg.ops {
+            spin_then_yield(&mut spins);
+        }
+        assert_eq!(state.processed.swap(0, Ordering::Relaxed), warmup_cfg.ops);
+        assert_eq!(state.take_checksum(), warmup_expected);
+        let started = Instant::now();
         let ranges = split_ranges(cfg.ops, cfg.producers);
         let mut joins = Vec::with_capacity(cfg.producers);
         for (start, end) in ranges {
-            let addrs = addrs.clone();
+            let addr = addr.clone();
             joins.push(thread::spawn(move || {
                 let mut reply_sum = 0u64;
                 for token in start..end {
-                    let shard = (token as usize) % addrs.len();
-                    let addr = &addrs[shard];
                     if cfg.workflow == Workflow::Mixed && is_ask(token, cfg.ask_pct) {
-                        let out = addr.ask(SyncAskMsg::Ask(token)).expect("af sync ask failed");
+                        let out = addr
+                            .ask(SyncAskMsg::Ask(token))
+                            .expect("af sync ask failed");
                         assert_eq!(out, work(token, cfg.work_iters));
                         reply_sum = reply_sum.wrapping_add(out);
                     } else {
@@ -360,50 +412,67 @@ fn run_af_sync(cfg: Config) -> ResultRow {
         }
         let mut reply_checksum = 0u64;
         for join in joins {
-            reply_checksum = reply_checksum.wrapping_add(join.join().expect("af sync producer panicked"));
+            reply_checksum =
+                reply_checksum.wrapping_add(join.join().expect("af sync producer panicked"));
         }
+        let mut spins = 0u32;
         while state.processed.load(Ordering::Relaxed) < cfg.ops {
-            let mut spins = 0u32;
             spin_then_yield(&mut spins);
         }
         let elapsed = started.elapsed();
-        let observed = state.checksum.load(Ordering::Relaxed);
-        assert_eq!(observed, expected);
+        assert_eq!(state.processed.swap(0, Ordering::Relaxed), cfg.ops);
+        assert_eq!(state.take_checksum(), expected);
         let _ = reply_checksum;
-        for handle in handles {
-            handle.shutdown();
-        }
+        handle.shutdown();
         runs.push(cfg.ops as f64 / elapsed.as_secs_f64());
     }
-    ResultRow { delivered_per_sec: median(&mut runs) }
+    ResultRow {
+        delivered_per_sec: median(&mut runs),
+    }
 }
 
 fn run_actix_sync(cfg: Config) -> ResultRow {
     let expected = expected_checksum(cfg);
+    let warmup_cfg = warmup_cfg(cfg);
+    let warmup_expected = expected_checksum(warmup_cfg);
     let mut runs = Vec::with_capacity(cfg.runs);
     for _ in 0..cfg.runs {
         let state = SharedState::new(cfg.work_iters);
         state.reset();
         let sys = System::new();
         let throughput = sys.block_on(async move {
-            let started = Instant::now();
-            let mut addrs = Vec::with_capacity(1);
-            for _ in 0..1 {
-                let actor_state = state.clone();
-                addrs.push(SyncArbiter::start(1, move || ActixSyncRealityActor { state: actor_state.clone() }));
+            let actor_state = state.clone();
+            let addr = SyncArbiter::start(1, move || ActixSyncRealityActor {
+                state: actor_state.clone(),
+            });
+            for token in 0..warmup_cfg.ops {
+                if cfg.workflow == Workflow::Mixed && is_ask(token, cfg.ask_pct) {
+                    let out = addr
+                        .send(ActixSyncAskMsg(token))
+                        .await
+                        .expect("actix sync warmup ask failed");
+                    assert_eq!(out, work(token, cfg.work_iters));
+                } else {
+                    addr.do_send(ActixSyncTellMsg(token));
+                }
             }
+            while state.processed.load(Ordering::Relaxed) < warmup_cfg.ops {
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(state.processed.swap(0, Ordering::Relaxed), warmup_cfg.ops);
+            assert_eq!(state.take_checksum(), warmup_expected);
+            let started = Instant::now();
             let ranges = split_ranges(cfg.ops, cfg.producers);
             let mut joins = Vec::with_capacity(cfg.producers);
             for (start, end) in ranges {
-                let addrs = addrs.clone();
+                let addr = addr.clone();
                 joins.push(tokio::task::spawn_blocking(move || {
                     let mut reply_sum = 0u64;
                     for token in start..end {
-                        let shard = (token as usize) % addrs.len();
-                        let addr = &addrs[shard];
                         if cfg.workflow == Workflow::Mixed && is_ask(token, cfg.ask_pct) {
-                            let out = futures::executor::block_on(addr.send(ActixSyncAskMsg(token)))
-                                .expect("actix sync ask failed");
+                            let out =
+                                futures::executor::block_on(addr.send(ActixSyncAskMsg(token)))
+                                    .expect("actix sync ask failed");
                             assert_eq!(out, work(token, cfg.work_iters));
                             reply_sum = reply_sum.wrapping_add(out);
                         } else {
@@ -415,20 +484,23 @@ fn run_actix_sync(cfg: Config) -> ResultRow {
             }
             let mut reply_checksum = 0u64;
             for join in joins {
-                reply_checksum = reply_checksum.wrapping_add(join.await.expect("actix sync producer panicked"));
+                reply_checksum =
+                    reply_checksum.wrapping_add(join.await.expect("actix sync producer panicked"));
             }
             while state.processed.load(Ordering::Relaxed) < cfg.ops {
                 tokio::task::yield_now().await;
             }
             let elapsed = started.elapsed();
-            let observed = state.checksum.load(Ordering::Relaxed);
-            assert_eq!(observed, expected);
+            assert_eq!(state.processed.swap(0, Ordering::Relaxed), cfg.ops);
+            assert_eq!(state.take_checksum(), expected);
             let _ = reply_checksum;
             cfg.ops as f64 / elapsed.as_secs_f64()
         });
         runs.push(throughput);
     }
-    ResultRow { delivered_per_sec: median(&mut runs) }
+    ResultRow {
+        delivered_per_sec: median(&mut runs),
+    }
 }
 
 // ---- async ----
@@ -437,13 +509,14 @@ struct AfAsyncRealityActor {
     state: SharedState,
 }
 
-impl af_async::AsyncActor for AfAsyncRealityActor {}
-
-impl af_async::Actor for AfAsyncRealityActor {
-    type ActorMailboxContract = af_async::contract::TellAsk;
+impl af_async::AsyncActor for AfAsyncRealityActor {
+    type Contract = af_async::contract::TellAsk;
     type Tell = u64;
     type Ask = u64;
     type Reply = u64;
+    type Channel = ();
+    type PubSub = ();
+    type Broadcast = ();
 
     async fn handle_tell(&mut self, token: Self::Tell) {
         let _ = self.state.apply(token);
@@ -507,7 +580,8 @@ impl RactorActor for RactorTellActor {
         &self,
         _myself: RactorActorRef<Self::Msg>,
         state: Self::Arguments,
-    ) -> impl std::future::Future<Output = Result<Self::State, RactorActorProcessingErr>> + Send {
+    ) -> impl std::future::Future<Output = Result<Self::State, RactorActorProcessingErr>> + Send
+    {
         std::future::ready(Ok(state))
     }
 
@@ -566,18 +640,8 @@ fn async_runtime_builder(workers: usize) -> tokio::runtime::Builder {
 
 fn run_af_async(cfg: Config) -> ResultRow {
     let expected = expected_checksum(cfg);
-    let use_current_pool = std::env::var("ICANACT_AF_CURRENT_THREAD")
-        .ok()
-        .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
-        .unwrap_or(false);
-    let use_await_tell = std::env::var("ICANACT_AF_AWAIT_TELL")
-        .ok()
-        .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
-        .unwrap_or(false);
-    let use_direct_mailbox = std::env::var("ICANACT_AF_DIRECT_MAILBOX")
-        .ok()
-        .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
-        .unwrap_or(false);
+    let warmup_cfg = warmup_cfg(cfg);
+    let warmup_expected = expected_checksum(warmup_cfg);
     let use_current_runtime = std::env::var("ICANACT_AF_BENCH_CURRENT_THREAD")
         .ok()
         .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
@@ -589,95 +653,57 @@ fn run_af_async(cfg: Config) -> ResultRow {
         } else {
             cfg.producers.max(1)
         })
-            .enable_all()
-            .build()
-            .expect("af async runtime");
+        .enable_all()
+        .build()
+        .expect("af async runtime");
         let throughput = rt.block_on(async move {
             let state = SharedState::new(cfg.work_iters);
             state.reset();
-            let started = Instant::now();
-            let mut addrs = Vec::with_capacity(1);
-            let mut handles = Vec::with_capacity(1);
-            for _ in 0..1 {
-                let spawn_opts = af_async::SpawnOpts {
+            let (addr, handle) = af_async::spawn_with_opts(
+                AfAsyncRealityActor {
+                    state: state.clone(),
+                },
+                af_async::SpawnOpts {
                     mailbox_capacity: cfg.mailbox_cap,
                     ..Default::default()
-                };
-                let (addr, handle) = if use_current_pool {
-                    af_async::spawn_on_current_thread_pool_with_opts(
-                        AfAsyncRealityActor { state: state.clone() },
-                        spawn_opts,
-                    )
+                },
+            )
+            .await;
+            let resolved = addr
+                .resolve_tell_fast()
+                .expect("af async resolved tell ref");
+            for token in 0..warmup_cfg.ops {
+                if cfg.workflow == Workflow::Mixed && is_ask(token, cfg.ask_pct) {
+                    let out = addr.ask(token).await.expect("af async warmup ask failed");
+                    assert_eq!(out, work(token, cfg.work_iters));
                 } else {
-                    af_async::spawn_with_opts(
-                        AfAsyncRealityActor { state: state.clone() },
-                        spawn_opts,
-                    )
-                };
-                addrs.push(addr);
-                handles.push(handle);
+                    let mut warmup_addr = resolved.clone();
+                    while !warmup_addr.tell(token) {
+                        tokio::task::yield_now().await;
+                    }
+                }
             }
-            let mailboxes = if use_direct_mailbox {
-                Some(
-                    addrs.iter()
-                        .map(|addr| addr.mailbox_addr().expect("af async mailbox snapshot"))
-                        .collect::<Vec<_>>(),
-                )
-            } else {
-                None
-            };
+            while state.processed.load(Ordering::Relaxed) < warmup_cfg.ops {
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(state.processed.swap(0, Ordering::Relaxed), warmup_cfg.ops);
+            assert_eq!(state.take_checksum(), warmup_expected);
+            let started = Instant::now();
             let ranges = split_ranges(cfg.ops, cfg.producers);
             let mut joins = Vec::with_capacity(cfg.producers);
             for (start, end) in ranges {
-                let addrs = addrs.clone();
-                let mailboxes = mailboxes.clone();
+                let addr = addr.clone();
+                let mut resolved = resolved.clone();
                 joins.push(tokio::spawn(async move {
                     let mut reply_sum = 0u64;
                     for token in start..end {
-                        let shard = (token as usize) % addrs.len();
-                        let addr = &addrs[shard];
-                        let mailbox = mailboxes.as_ref().map(|mailboxes| &mailboxes[shard]);
                         if cfg.workflow == Workflow::Mixed && is_ask(token, cfg.ask_pct) {
-                            let pending = loop {
-                                match addr.ask_deferred(token) {
-                                    Ok(pending) => break pending,
-                                    Err(icanact_core::local_async::ask::AskError::Full) => {
-                                        tokio::task::yield_now().await;
-                                    }
-                                    Err(err) => panic!("af async ask failed: {err:?}"),
-                                }
-                            };
-                            let out = pending.wait().await.expect("af async ask wait failed");
+                            let out = addr.ask(token).await.expect("af async ask failed");
                             assert_eq!(out, work(token, cfg.work_iters));
                             reply_sum = reply_sum.wrapping_add(out);
                         } else {
-                            if let Some(mailbox) = mailbox {
-                                if use_await_tell {
-                                    assert!(
-                                        mailbox
-                                            .send(
-                                                <<AfAsyncRealityActor as af_async::Actor>::ActorMailboxContract as SupportsTell<
-                                                    AfAsyncRealityActor,
-                                                >>::runtime_tell(token),
-                                            )
-                                            .await,
-                                        "af async direct send failed"
-                                    );
-                                } else {
-                                    while !mailbox.tell(
-                                        <<AfAsyncRealityActor as af_async::Actor>::ActorMailboxContract as SupportsTell<
-                                            AfAsyncRealityActor,
-                                        >>::runtime_tell(token),
-                                    ) {
-                                        tokio::task::yield_now().await;
-                                    }
-                                }
-                            } else if use_await_tell {
-                                assert!(addr.send(token).await, "af async send failed");
-                            } else {
-                                while !addr.tell(token) {
-                                    tokio::task::yield_now().await;
-                                }
+                            while !resolved.tell(token) {
+                                tokio::task::yield_now().await;
                             }
                         }
                     }
@@ -686,55 +712,70 @@ fn run_af_async(cfg: Config) -> ResultRow {
             }
             let mut reply_checksum = 0u64;
             for join in joins {
-                reply_checksum = reply_checksum.wrapping_add(join.await.expect("af async producer panicked"));
+                reply_checksum =
+                    reply_checksum.wrapping_add(join.await.expect("af async producer panicked"));
             }
             while state.processed.load(Ordering::Relaxed) < cfg.ops {
                 tokio::task::yield_now().await;
             }
             let elapsed = started.elapsed();
-            let observed = state.checksum.load(Ordering::Relaxed);
-            assert_eq!(observed, expected);
+            assert_eq!(state.processed.swap(0, Ordering::Relaxed), cfg.ops);
+            assert_eq!(state.take_checksum(), expected);
             let _ = reply_checksum;
-            for handle in handles {
-                handle.shutdown().await;
-            }
+            handle.shutdown().await;
             cfg.ops as f64 / elapsed.as_secs_f64()
         });
         runs.push(throughput);
     }
-    ResultRow { delivered_per_sec: median(&mut runs) }
+    ResultRow {
+        delivered_per_sec: median(&mut runs),
+    }
 }
 
 fn run_actix_async(cfg: Config) -> ResultRow {
     let expected = expected_checksum(cfg);
+    let warmup_cfg = warmup_cfg(cfg);
+    let warmup_expected = expected_checksum(warmup_cfg);
     let mut runs = Vec::with_capacity(cfg.runs);
     for _ in 0..cfg.runs {
         let sys = System::new();
         let throughput = sys.block_on(async move {
             let state = SharedState::new(cfg.work_iters);
             state.reset();
-            let started = Instant::now();
-            let mut addrs = Vec::with_capacity(1);
-            for _ in 0..1 {
-                addrs.push(
-                    ActixAsyncRealityActor {
-                        state: state.clone(),
-                        mailbox_cap: cfg.mailbox_cap,
-                    }
-                    .start(),
-                );
+            let addr = ActixAsyncRealityActor {
+                state: state.clone(),
+                mailbox_cap: cfg.mailbox_cap,
             }
+            .start();
+            for token in 0..warmup_cfg.ops {
+                if cfg.workflow == Workflow::Mixed && is_ask(token, cfg.ask_pct) {
+                    let out = addr
+                        .send(ActixAsyncAskMsg(token))
+                        .await
+                        .expect("actix async warmup ask failed");
+                    assert_eq!(out, work(token, cfg.work_iters));
+                } else {
+                    addr.do_send(ActixAsyncTellMsg(token));
+                }
+            }
+            while state.processed.load(Ordering::Relaxed) < warmup_cfg.ops {
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(state.processed.swap(0, Ordering::Relaxed), warmup_cfg.ops);
+            assert_eq!(state.take_checksum(), warmup_expected);
+            let started = Instant::now();
             let ranges = split_ranges(cfg.ops, cfg.producers);
             let mut joins = Vec::with_capacity(cfg.producers);
             for (start, end) in ranges {
-                let addrs = addrs.clone();
+                let addr = addr.clone();
                 joins.push(tokio::spawn(async move {
                     let mut reply_sum = 0u64;
                     for token in start..end {
-                        let shard = (token as usize) % addrs.len();
-                        let addr = &addrs[shard];
                         if cfg.workflow == Workflow::Mixed && is_ask(token, cfg.ask_pct) {
-                            let out = addr.send(ActixAsyncAskMsg(token)).await.expect("actix async ask failed");
+                            let out = addr
+                                .send(ActixAsyncAskMsg(token))
+                                .await
+                                .expect("actix async ask failed");
                             assert_eq!(out, work(token, cfg.work_iters));
                             reply_sum = reply_sum.wrapping_add(out);
                         } else {
@@ -746,20 +787,23 @@ fn run_actix_async(cfg: Config) -> ResultRow {
             }
             let mut reply_checksum = 0u64;
             for join in joins {
-                reply_checksum = reply_checksum.wrapping_add(join.await.expect("actix async producer panicked"));
+                reply_checksum =
+                    reply_checksum.wrapping_add(join.await.expect("actix async producer panicked"));
             }
             while state.processed.load(Ordering::Relaxed) < cfg.ops {
                 tokio::task::yield_now().await;
             }
             let elapsed = started.elapsed();
-            let observed = state.checksum.load(Ordering::Relaxed);
-            assert_eq!(observed, expected);
+            assert_eq!(state.processed.swap(0, Ordering::Relaxed), cfg.ops);
+            assert_eq!(state.take_checksum(), expected);
             let _ = reply_checksum;
             cfg.ops as f64 / elapsed.as_secs_f64()
         });
         runs.push(throughput);
     }
-    ResultRow { delivered_per_sec: median(&mut runs) }
+    ResultRow {
+        delivered_per_sec: median(&mut runs),
+    }
 }
 
 fn run_tokio_mpsc_async(cfg: Config) -> ResultRow {
@@ -779,9 +823,9 @@ fn run_tokio_mpsc_async(cfg: Config) -> ResultRow {
         } else {
             cfg.producers.max(1)
         })
-            .enable_all()
-            .build()
-            .expect("tokio mpsc async runtime");
+        .enable_all()
+        .build()
+        .expect("tokio mpsc async runtime");
         let throughput = rt.block_on(async move {
             let state = SharedState::new(cfg.work_iters);
             state.reset();
@@ -866,7 +910,9 @@ fn run_tokio_mpsc_async(cfg: Config) -> ResultRow {
         });
         runs.push(throughput);
     }
-    ResultRow { delivered_per_sec: median(&mut runs) }
+    ResultRow {
+        delivered_per_sec: median(&mut runs),
+    }
 }
 
 fn run_ractor_async_tell(cfg: Config) -> ResultRow {
@@ -922,11 +968,15 @@ fn run_ractor_async_tell(cfg: Config) -> ResultRow {
         });
         runs.push(throughput);
     }
-    ResultRow { delivered_per_sec: median(&mut runs) }
+    ResultRow {
+        delivered_per_sec: median(&mut runs),
+    }
 }
 
 fn run_kameo_async(cfg: Config) -> ResultRow {
     let expected = expected_checksum(cfg);
+    let warmup_cfg = warmup_cfg(cfg);
+    let warmup_expected = expected_checksum(warmup_cfg);
     let mut runs = Vec::with_capacity(cfg.runs);
     for _ in 0..cfg.runs {
         let rt = async_runtime_builder(cfg.producers.max(1))
@@ -936,29 +986,53 @@ fn run_kameo_async(cfg: Config) -> ResultRow {
         let throughput = rt.block_on(async move {
             let state = SharedState::new(cfg.work_iters);
             state.reset();
-            let started = Instant::now();
-            let mut addrs = Vec::with_capacity(1);
-            for _ in 0..1 {
-                addrs.push(KameoRealityActor::spawn_with_mailbox(
-                    KameoRealityActor { state: state.clone() },
-                    mailbox::bounded(cfg.mailbox_cap),
-                ));
+            let addr = KameoRealityActor::spawn_with_mailbox(
+                KameoRealityActor {
+                    state: state.clone(),
+                },
+                mailbox::bounded(cfg.mailbox_cap),
+            );
+            for token in 0..warmup_cfg.ops {
+                if cfg.workflow == Workflow::Mixed && is_ask(token, cfg.ask_pct) {
+                    let out = addr
+                        .ask(KameoAskMsg(token))
+                        .send()
+                        .await
+                        .expect("kameo warmup ask failed");
+                    assert_eq!(out, work(token, cfg.work_iters));
+                } else {
+                    addr.tell(KameoTellMsg(token))
+                        .send()
+                        .await
+                        .expect("kameo warmup tell failed");
+                }
             }
+            while state.processed.load(Ordering::Relaxed) < warmup_cfg.ops {
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(state.processed.swap(0, Ordering::Relaxed), warmup_cfg.ops);
+            assert_eq!(state.take_checksum(), warmup_expected);
+            let started = Instant::now();
             let ranges = split_ranges(cfg.ops, cfg.producers);
             let mut joins = Vec::with_capacity(cfg.producers);
             for (start, end) in ranges {
-                let addrs = addrs.clone();
+                let addr = addr.clone();
                 joins.push(tokio::spawn(async move {
                     let mut reply_sum = 0u64;
                     for token in start..end {
-                        let shard = (token as usize) % addrs.len();
-                        let addr = &addrs[shard];
                         if cfg.workflow == Workflow::Mixed && is_ask(token, cfg.ask_pct) {
-                            let out = addr.ask(KameoAskMsg(token)).send().await.expect("kameo ask failed");
+                            let out = addr
+                                .ask(KameoAskMsg(token))
+                                .send()
+                                .await
+                                .expect("kameo ask failed");
                             assert_eq!(out, work(token, cfg.work_iters));
                             reply_sum = reply_sum.wrapping_add(out);
                         } else {
-                            addr.tell(KameoTellMsg(token)).send().await.expect("kameo tell failed");
+                            addr.tell(KameoTellMsg(token))
+                                .send()
+                                .await
+                                .expect("kameo tell failed");
                         }
                     }
                     reply_sum
@@ -966,20 +1040,23 @@ fn run_kameo_async(cfg: Config) -> ResultRow {
             }
             let mut reply_checksum = 0u64;
             for join in joins {
-                reply_checksum = reply_checksum.wrapping_add(join.await.expect("kameo producer panicked"));
+                reply_checksum =
+                    reply_checksum.wrapping_add(join.await.expect("kameo producer panicked"));
             }
             while state.processed.load(Ordering::Relaxed) < cfg.ops {
                 tokio::task::yield_now().await;
             }
             let elapsed = started.elapsed();
-            let observed = state.checksum.load(Ordering::Relaxed);
-            assert_eq!(observed, expected);
+            assert_eq!(state.processed.swap(0, Ordering::Relaxed), cfg.ops);
+            assert_eq!(state.take_checksum(), expected);
             let _ = reply_checksum;
             cfg.ops as f64 / elapsed.as_secs_f64()
         });
         runs.push(throughput);
     }
-    ResultRow { delivered_per_sec: median(&mut runs) }
+    ResultRow {
+        delivered_per_sec: median(&mut runs),
+    }
 }
 
 fn main() {
@@ -1004,7 +1081,10 @@ fn main() {
         RuntimeKind::Async => {
             let mut rows = vec![
                 ("actor_framework_async".to_string(), Some(run_af_async(cfg))),
-                ("pure_tokio_mpsc_async".to_string(), Some(run_tokio_mpsc_async(cfg))),
+                (
+                    "pure_tokio_mpsc_async".to_string(),
+                    Some(run_tokio_mpsc_async(cfg)),
+                ),
                 ("actix_async".to_string(), Some(run_actix_async(cfg))),
             ];
             if cfg.workflow == Workflow::Tell {
@@ -1025,7 +1105,10 @@ fn main() {
             print_rows("sync", cfg, &sync_rows);
             let mut async_rows = vec![
                 ("actor_framework_async".to_string(), Some(run_af_async(cfg))),
-                ("pure_tokio_mpsc_async".to_string(), Some(run_tokio_mpsc_async(cfg))),
+                (
+                    "pure_tokio_mpsc_async".to_string(),
+                    Some(run_tokio_mpsc_async(cfg)),
+                ),
                 ("actix_async".to_string(), Some(run_actix_async(cfg))),
             ];
             if cfg.workflow == Workflow::Tell {
